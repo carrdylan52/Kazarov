@@ -1,6 +1,6 @@
 # gfx
 
-The port's Vulkan renderer (1.3 or later, see "Device"). `gfx.hpp` is the whole public API (namespace `gfx`); everything
+The port's Vulkan renderer (1.3 or later, or the game's higher floor; see "Device"). `gfx.hpp` is the whole public API (namespace `gfx`); everything
 else is internal. No game header is reachable from here: `kz_port_library()`
 (`cmake/KazarovPort.cmake`) builds it without `port.h` or the game's include paths. Replacement
 units include `"gfx/gfx.hpp"`.
@@ -334,7 +334,9 @@ one over the rest, and Vulkan 1.4 over 1.3 within a kind) and prints, for every 
 over, each requirement that device lacks. `requirements.cpp` holds the check as a pure function of
 the device's capabilities.
 
-Nothing the renderer calls was introduced by Vulkan 1.4, so 1.3 is the floor:
+Nothing the renderer calls was introduced by Vulkan 1.4, so 1.3 is the renderer's floor. Each game
+sets its own with `kz_port_library(… MIN_VULKAN 1.3|1.4)`, which `RendererConfig::min_api_version`
+overrides when set; the loader and every device are checked against it.
 
 | Requirement | Introduced by |
 |---|---|

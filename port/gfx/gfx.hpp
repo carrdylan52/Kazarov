@@ -66,6 +66,8 @@ struct RendererConfig {
     // to the target, letterboxed on the main target.
     uint32_t              logical_width = 0;
     uint32_t              logical_height = 0;
+    // VK_MAKE_API_VERSION; 0 takes the game's MIN_VULKAN from kz_port_library().
+    uint32_t              min_api_version = 0;
     PresentMode           present_mode = PresentMode::Fifo;
     std::filesystem::path pipeline_cache = "save/pipeline_cache.bin";
     // Pixels per logical texel of render targets; 0 derives it from the window height at init.
@@ -102,8 +104,8 @@ struct RendererFeatures {
     bool     portability_subset;
 };
 
-// Exits the process with a message, naming what each device lacks, if no Vulkan 1.3 or later device
-// has what the renderer needs and can drive the window (any device with a graphics queue, offscreen).
+// Exits the process with a message, naming what each device lacks, if no device of the minimum API version
+// or later has what the renderer needs and can drive the window (any device with a graphics queue, offscreen).
 void             RendererInit(SDL_Window *window, const RendererConfig &config);
 RendererFeatures ActiveRendererFeatures();
 float            LogicalWidth();

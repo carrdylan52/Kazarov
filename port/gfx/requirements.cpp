@@ -17,11 +17,11 @@ bool DepthStencilUsable(VkPhysicalDevice device, VkFormat format) {
     return (properties.optimalTilingFeatures & needed) == needed;
 }
 
-std::string Version(uint32_t version) {
+} // namespace
+
+std::string VersionName(uint32_t version) {
     return std::to_string(VK_API_VERSION_MAJOR(version)) + "." + std::to_string(VK_API_VERSION_MINOR(version));
 }
-
-} // namespace
 
 DeviceCaps QueryDeviceCaps(VkPhysicalDevice device, VkSurfaceKHR surface) {
     DeviceCaps caps;
@@ -83,15 +83,15 @@ bool HasExtension(const DeviceCaps &caps, const char *name) {
     return std::ranges::find(caps.extensions, name) != caps.extensions.end();
 }
 
-std::vector<std::string> MissingRequirements(const DeviceCaps &caps, bool offscreen) {
+std::vector<std::string> MissingRequirements(const DeviceCaps &caps, bool offscreen, uint32_t min_api_version) {
     std::vector<std::string> missing;
     auto                     need = [&](bool present, const char *what) {
         if (!present) {
             missing.emplace_back(what);
         }
     };
-    if (caps.api_version < VK_API_VERSION_1_3) {
-        missing.push_back("Vulkan 1.3 (it has " + Version(caps.api_version) + ")");
+    if (caps.api_version < min_api_version) {
+        missing.push_back("Vulkan " + VersionName(min_api_version) + " (it has " + VersionName(caps.api_version) + ")");
         return missing;
     }
     if (!offscreen) {

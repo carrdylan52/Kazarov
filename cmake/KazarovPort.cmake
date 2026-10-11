@@ -32,20 +32,27 @@ function(kz_port_shaders out_var)
     set(${out_var} ${headers} PARENT_SCOPE)
 endfunction()
 
-# kz_port_library(<target> APP_NAME <name> APP_ID <id> ENV_PREFIX <prefix>
+# kz_port_library(<target> APP_NAME <name> APP_ID <id> ENV_PREFIX <prefix> MIN_VULKAN <1.3|1.4>
 #                 [SHADER_DIRS <dir>...] [DEFINES <define>...])
 #
 # An OBJECT library of the shared host code (port/gfx), compiled without any game header.
 # APP_NAME is the name the game shows, APP_ID its lower-case identifier, ENV_PREFIX what its
-# environment variables start with, underscore included. They reach the code as generated/app/app_info.hpp.
+# environment variables start with, underscore included, MIN_VULKAN the oldest Vulkan version the game
+# accepts in the loader and the device. They reach the code as generated/app/app_info.hpp.
 # SHADER_DIRS adds the game's own shaders to the renderer's.
 function(kz_port_library target)
-    cmake_parse_arguments(PARSE_ARGV 1 arg "" "APP_NAME;APP_ID;ENV_PREFIX" "SHADER_DIRS;DEFINES")
-    foreach(required APP_NAME APP_ID ENV_PREFIX)
+    cmake_parse_arguments(PARSE_ARGV 1 arg "" "APP_NAME;APP_ID;ENV_PREFIX;MIN_VULKAN" "SHADER_DIRS;DEFINES")
+    foreach(required APP_NAME APP_ID ENV_PREFIX MIN_VULKAN)
         if(NOT DEFINED arg_${required})
             message(FATAL_ERROR "kz_port_library(${target}) needs ${required}")
         endif()
     endforeach()
+
+    if(NOT arg_MIN_VULKAN MATCHES "^1\\.([34])$")
+        message(FATAL_ERROR "kz_port_library(${target}) MIN_VULKAN is 1.3 or 1.4, not ${arg_MIN_VULKAN}")
+    endif()
+    # VK_MAKE_API_VERSION(0, 1, minor, 0), so the header needs no Vulkan include.
+    math(EXPR min_vulkan_version "(1 << 22) | (${CMAKE_MATCH_1} << 12)" OUTPUT_FORMAT HEXADECIMAL)
 
     set(generated ${CMAKE_BINARY_DIR}/generated)
     foreach(name APP_NAME APP_ID ENV_PREFIX)
@@ -54,7 +61,7 @@ function(kz_port_library target)
         set(${name}_LITERAL "\"${escaped}\"")
     endforeach()
     file(CONFIGURE OUTPUT ${generated}/app/app_info.hpp
-        CONTENT "#pragma once\n\nnamespace app {\ninline constexpr const char *kName = ${APP_NAME_LITERAL};\ninline constexpr const char *kId = ${APP_ID_LITERAL};\n} // namespace app\n\n#define KZ_APP_ENV(name) ${ENV_PREFIX_LITERAL} name\n")
+        CONTENT "#pragma once\n\n#include <cstdint>\n\nnamespace app {\ninline constexpr const char *kName = ${APP_NAME_LITERAL};\ninline constexpr const char *kId = ${APP_ID_LITERAL};\ninline constexpr uint32_t kMinVulkanVersion = ${min_vulkan_version};\n} // namespace app\n\n#define KZ_APP_ENV(name) ${ENV_PREFIX_LITERAL} name\n")
 
     kz_port_shaders(shader_headers DIRS ${KZ_ROOT}/port/gfx/shaders ${arg_SHADER_DIRS})
     file(GLOB_RECURSE sources CONFIGURE_DEPENDS ${KZ_ROOT}/port/gfx/*.cpp)

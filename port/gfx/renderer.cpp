@@ -87,8 +87,8 @@ bool InstanceHasExtension(const char *name) {
 void CreateInstance() {
     uint32_t loader_version = VK_API_VERSION_1_0;
     vkEnumerateInstanceVersion(&loader_version);
-    if (loader_version < VK_API_VERSION_1_3) {
-        Fatal("the Vulkan loader does not support Vulkan 1.3");
+    if (loader_version < g.config.min_api_version) {
+        Fatal("the Vulkan loader does not support Vulkan %s", VersionName(g.config.min_api_version).c_str());
     }
 
     std::vector<const char *> extensions;
@@ -205,7 +205,7 @@ void PickPhysicalDevice() {
         VkPhysicalDeviceProperties properties;
         vkGetPhysicalDeviceProperties(device, &properties);
         DeviceCaps               caps = QueryDeviceCaps(device, g.surface);
-        std::vector<std::string> missing = MissingRequirements(caps, g.offscreen);
+        std::vector<std::string> missing = MissingRequirements(caps, g.offscreen, g.config.min_api_version);
         uint32_t                 family;
         if (missing.empty() && !FindQueueFamily(device, &family)) {
             missing.emplace_back("a graphics queue family");
@@ -228,8 +228,10 @@ void PickPhysicalDevice() {
         }
     }
     if (best < 0) {
-        Fatal(g.offscreen ? "no Vulkan 1.3 device has the features the renderer needs"
-                          : "no Vulkan 1.3 device has the features the renderer needs and can present to the window");
+        std::string floor = VersionName(g.config.min_api_version);
+        Fatal(g.offscreen ? "no Vulkan %s device has the features the renderer needs"
+                          : "no Vulkan %s device has the features the renderer needs and can present to the window",
+              floor.c_str());
     }
 
     vkGetPhysicalDeviceProperties(g.physical_device, &g.properties);
@@ -779,6 +781,9 @@ void RendererInit(SDL_Window *window, const RendererConfig &config) {
     g.renderer_instance = ++instances;
     g.window = window;
     g.config = config;
+    if (g.config.min_api_version == 0) {
+        g.config.min_api_version = app::kMinVulkanVersion;
+    }
     if (config.logical_width == 0 || config.logical_height == 0) {
         Fatal("RendererConfig has no logical frame size");
     }
