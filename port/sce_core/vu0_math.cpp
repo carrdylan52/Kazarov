@@ -375,8 +375,11 @@ void DropShadowMatrix(Matrix m, Vector lp, float a, float b, float c, int mode) 
     }
 }
 
-// Returns 1 when every vertex, once transformed by ms, lies outside the box
-// minv..maxv scaled by its w, and 0 as soon as one does not.
+// Returns 0 at the first vertex that, transformed by ms, lies strictly inside
+// minv..maxv (x and y scaled by its w), and 1 when none does. Retail's libvu0
+// tests each vertex's six differences for zero or sign, not whether all the
+// vertices fail one plane, so a polygon crossing the box with every vertex
+// outside it is culled, as it is on the PS2.
 int ClipAll(Vector minv, Vector maxv, Matrix ms, Vector *vm, int n) {
     for (int i = 0; i < n; i++) {
         float p[4];

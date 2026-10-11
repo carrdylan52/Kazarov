@@ -62,3 +62,41 @@ TEST(SceCoreVu0, RotTransPersIsTwelvePointFourAfterTheDivide) {
     EXPECT_EQ(out[2], 3);
     EXPECT_EQ(out[3], 2);
 }
+
+// sceVu0ClipAll as retail's libvu0 runs it (Dark Cloud's SCUS_971.11, 0x1221d8): per vertex, the
+// sticky zero and sign flags of the six differences, and 0 at the first vertex that sets neither.
+// It does not ask whether every vertex fails one plane.
+TEST(SceCoreVu0, ClipAllIsZeroOnlyForAVertexStrictlyInside) {
+    vu0::Matrix identity;
+    vu0::UnitMatrix(identity);
+    vu0::Vector minv = {-1.0f, -1.0f, 0.0f, 0.5f};
+    vu0::Vector maxv = {1.0f, 1.0f, 0.0f, 100.0f};
+
+    vu0::Vector crossing[3] = {
+        {-2.0f, 0.0f, 0.0f, 1.0f},
+        {2.0f,  0.0f, 0.0f, 1.0f},
+        {0.0f,  2.0f, 0.0f, 1.0f},
+    };
+    EXPECT_EQ(vu0::ClipAll(minv, maxv, identity, crossing, 3), 1);
+
+    vu0::Vector boundary[1] = {
+        {1.0f, 0.0f, 0.0f, 1.0f}
+    };
+    EXPECT_EQ(vu0::ClipAll(minv, maxv, identity, boundary, 1), 1);
+    vu0::Vector near_plane[1] = {
+        {0.0f, 0.0f, 0.0f, 0.5f}
+    };
+    EXPECT_EQ(vu0::ClipAll(minv, maxv, identity, near_plane, 1), 1);
+
+    vu0::Vector one_inside[3] = {
+        {-2.0f, 0.0f, 0.0f, 1.0f},
+        {0.5f,  0.5f, 0.0f, 1.0f},
+        {0.0f,  2.0f, 0.0f, 1.0f},
+    };
+    EXPECT_EQ(vu0::ClipAll(minv, maxv, identity, one_inside, 3), 0);
+    // z takes no part; x and y scale with w.
+    vu0::Vector scaled[1] = {
+        {3.0f, -3.0f, 1000.0f, 4.0f}
+    };
+    EXPECT_EQ(vu0::ClipAll(minv, maxv, identity, scaled, 1), 0);
+}
