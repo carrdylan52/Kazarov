@@ -29,8 +29,12 @@ add_executable(kz_port_tests main.cpp ${tests} $<TARGET_OBJECTS:kz_port>)
 target_include_directories(kz_port_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(kz_port_tests PRIVATE kz_port GTest::gtest)
 
+# A case finishes in milliseconds, except the pipeline compiles, which a slow runner's lavapipe
+# stretches past the default.
+set(KZ_TEST_TIMEOUT 5 CACHE STRING "Seconds a test case may run before it is cut off")
 enable_testing()
 include(GoogleTest)
-gtest_discover_tests(kz_port_tests DISCOVERY_MODE PRE_TEST TEST_FILTER -PlatformClock.* PROPERTIES TIMEOUT 5)
+gtest_discover_tests(kz_port_tests DISCOVERY_MODE PRE_TEST TEST_FILTER -PlatformClock.*
+    PROPERTIES TIMEOUT ${KZ_TEST_TIMEOUT})
 gtest_discover_tests(kz_port_tests DISCOVERY_MODE PRE_TEST TEST_FILTER PlatformClock.*
-    PROPERTIES TIMEOUT 5 RUN_SERIAL TRUE)
+    PROPERTIES TIMEOUT ${KZ_TEST_TIMEOUT} RUN_SERIAL TRUE)

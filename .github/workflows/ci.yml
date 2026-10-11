@@ -55,6 +55,6 @@ jobs:
       - name: Port library tests
         run: >
           docker run --rm -v "$PWD:/k" -w /k -e SDL_VIDEODRIVER=offscreen kazarov-dev:ci sh -ec
-          'cmake -S port/tests -B /tmp/port-tests -G Ninja -DCMAKE_CXX_COMPILER=clang++;
+          'cmake -S port/tests -B /tmp/port-tests -G Ninja -DCMAKE_CXX_COMPILER=clang++ -DKZ_TEST_TIMEOUT=60;
           cmake --build /tmp/port-tests;
           ctest --test-dir /tmp/port-tests --output-on-failure -j4'
