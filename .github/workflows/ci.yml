@@ -52,3 +52,9 @@ jobs:
       - name: Smoke test the image
         run: |
           docker run --rm -v "$PWD:/k" kazarov-dev:ci sh -ec 'command -v wibo satansfiddle objdiff-cli clangd clang lldb-server-19 || true; mips-ps2-decompals-as --version >/dev/null; python3 -c "import splat, pycdlib, clang.cindex, graphviz"; python3 $M2C --help >/dev/null; cat /opt/kazarov/image-id'
+      - name: Port library tests
+        run: >
+          docker run --rm -v "$PWD:/k" -w /k -e SDL_VIDEODRIVER=offscreen kazarov-dev:ci sh -ec
+          'cmake -S port/tests -B /tmp/port-tests -G Ninja -DCMAKE_CXX_COMPILER=clang++;
+          cmake --build /tmp/port-tests;
+          ctest --test-dir /tmp/port-tests --output-on-failure -j4'
