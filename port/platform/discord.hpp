@@ -11,8 +11,8 @@ struct DiscordActivity {
     bool operator==(const DiscordActivity &) const = default;
 };
 
-inline constexpr const char *kDiscordClientId = "1556980864171245638";
-
+// The game's Discord application (kz_port_library's DISCORD_CLIENT_ID); nothing without one.
+void DiscordStart();
 void DiscordStart(std::string client_id);
 void DiscordSetActivity(const DiscordActivity &activity);
 void DiscordStop();

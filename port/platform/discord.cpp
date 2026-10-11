@@ -13,6 +13,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include "app/app_info.hpp"
+
 #include <algorithm>
 #include <bit>
 #include <cerrno>
@@ -39,7 +41,6 @@ using Clock = std::chrono::steady_clock;
 
 static_assert(std::endian::native == std::endian::little, "Discord's frame header is little-endian");
 
-constexpr const char *kProjectUrl = "https://github.com/TheMoonPeople/Chronicle";
 constexpr auto        kReconnectDelay = std::chrono::seconds(15);
 // Discord's rate limit is five updates per 20 seconds.
 constexpr auto kUpdateInterval = std::chrono::seconds(4);
@@ -361,16 +362,20 @@ void Run(std::string client_id) {
 std::string DiscordActivityCommand(const DiscordActivity &activity, long long start_time, int pid, int nonce) {
     Json presence;
     presence["timestamps"]["start"] = start_time;
-    presence["assets"]["small_image"] = "chronicle";
-    presence["assets"]["small_text"] = "Chronicle, the Dark Cloud decompilation";
+    if (*app::kDiscordImage != '\0') {
+        presence["assets"]["small_image"] = app::kDiscordImage;
+        presence["assets"]["small_text"] = app::kDiscordImageText;
+    }
     if (!activity.large_image.empty()) {
         presence["assets"]["large_image"] = activity.large_image;
         presence["assets"]["large_text"] = activity.large_text;
     }
-    Json button;
-    button["label"] = "Chronicle on GitHub";
-    button["url"] = kProjectUrl;
-    presence["buttons"].push_back(std::move(button));
+    if (*app::kProjectUrl != '\0') {
+        Json button;
+        button["label"] = app::kProjectLabel;
+        button["url"] = app::kProjectUrl;
+        presence["buttons"].push_back(std::move(button));
+    }
     if (!activity.details.empty()) {
         presence["details"] = activity.details;
     }
@@ -383,6 +388,10 @@ std::string DiscordActivityCommand(const DiscordActivity &activity, long long st
     command["args"]["activity"] = std::move(presence);
     command["nonce"] = std::to_string(nonce);
     return command.dump();
+}
+
+void DiscordStart() {
+    DiscordStart(app::kDiscordClientId);
 }
 
 void DiscordStart(std::string client_id) {

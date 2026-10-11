@@ -10,6 +10,7 @@
 #include <cstring>
 #include <vector>
 
+#include "app/app_info.hpp"
 #include "audio/wav.hpp"
 #include "clock.hpp"
 
@@ -84,7 +85,7 @@ void SDLCALL Feed(void *, SDL_AudioStream *stream, int additional_amount, int) {
     }
 }
 
-// DC_AUDIO_WAV=<path>: the mixer is pulled on the game thread as the clock ticks, so N ticks write
+// <prefix>AUDIO_WAV=<path>: the mixer is pulled on the game thread as the clock ticks, so N ticks write
 // N / tick rate seconds whatever the run's real speed; a headless run records exactly what it
 // would have played.
 struct WavCapture {
@@ -135,10 +136,10 @@ bool AudioOutputStart(int rate, AudioRenderFn render, void *user) {
     g_rate = rate;
     g_upmix.Reset(rate);
     g_chunk.assign(kChunkFrames * 2, 0.0f);
-    if (const char *path = std::getenv("DC_AUDIO_WAV"); path != nullptr && *path != '\0') {
+    if (const char *path = std::getenv(KZ_APP_ENV("AUDIO_WAV")); path != nullptr && *path != '\0') {
         return StartCapture(path, rate);
     }
-    if (const char *setting = std::getenv("DC_AUDIO"); setting != nullptr && std::strcmp(setting, "off") == 0) {
+    if (const char *setting = std::getenv(KZ_APP_ENV("AUDIO")); setting != nullptr && std::strcmp(setting, "off") == 0) {
         return false;
     }
     if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {

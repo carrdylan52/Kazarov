@@ -18,6 +18,8 @@
 #include <system_error>
 #include <vector>
 
+#include "app/app_info.hpp"
+
 namespace fs = std::filesystem;
 
 namespace {
@@ -65,7 +67,7 @@ fs::path Installed(const char *name) {
     fs::path base;
 #ifdef _WIN32
     if (std::optional<fs::path> local = FromEnvironment("LOCALAPPDATA")) {
-        return *local / "chronicle" / name;
+        return *local / app::kId / name;
     }
 #endif
     if (std::optional<fs::path> xdg = FromEnvironment("XDG_DATA_HOME"); xdg && xdg->is_absolute()) {
@@ -76,7 +78,7 @@ fs::path Installed(const char *name) {
         std::error_code error;
         return fs::current_path(error) / name;
     }
-    return base / "chronicle" / name;
+    return base / app::kId / name;
 }
 
 fs::path Absolute(const fs::path &path) {
@@ -175,7 +177,7 @@ void PathsSetSaveRoot(const fs::path &root) {
 
 const fs::path &PathsDataRoot() {
     if (!data_root) {
-        std::optional<fs::path> chosen = data_override ? data_override : FromEnvironment("DC_DATA");
+        std::optional<fs::path> chosen = data_override ? data_override : FromEnvironment(KZ_APP_ENV("DATA"));
         data_root = Absolute(chosen.value_or(Local("data").value_or(Installed("data"))));
     }
     return *data_root;
@@ -187,7 +189,7 @@ const fs::path &PathsSaveRoot() {
     if (save_root) {
         return *save_root;
     }
-    std::optional<fs::path> chosen = save_override ? save_override : FromEnvironment("DC_SAVE");
+    std::optional<fs::path> chosen = save_override ? save_override : FromEnvironment(KZ_APP_ENV("SAVE"));
     std::vector<fs::path>   candidates;
     if (chosen) {
         candidates.push_back(Absolute(*chosen));

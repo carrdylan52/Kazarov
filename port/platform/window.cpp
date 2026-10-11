@@ -9,8 +9,9 @@
 #include <utility>
 #include <vector>
 
+#include "app/app_info.hpp"
+#include "app/icon.hpp"
 #include "gfx/gfx.hpp"
-#include "icon/chronicle.hpp"
 
 namespace {
 
@@ -57,7 +58,7 @@ Placement Place(const WindowConfig &config, SDL_DisplayID display) {
 } // namespace
 
 void WindowInit(const WindowConfig &config) {
-    SDL_SetAppMetadata("Dark Cloud", nullptr, "dcdecomp.darkcloud");
+    SDL_SetAppMetadata(app::kName, nullptr, app::kIdentifier);
     g_headless = config.headless;
     if (config.headless) {
 #ifdef _WIN32
@@ -85,7 +86,7 @@ void WindowInit(const WindowConfig &config) {
         flags |= SDL_WINDOW_FULLSCREEN;
     }
     SDL_PropertiesID props = SDL_CreateProperties();
-    SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING, "Dark Cloud");
+    SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING, app::kName);
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER, placement.width);
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, placement.height);
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_FLAGS_NUMBER, static_cast<Sint64>(flags));
@@ -96,8 +97,8 @@ void WindowInit(const WindowConfig &config) {
     if (g_window == nullptr) {
         Fatal("SDL_CreateWindow");
     }
-    SDL_Surface *icon = SDL_CreateSurfaceFrom(kIconSize, kIconSize, SDL_PIXELFORMAT_RGBA32,
-                                              const_cast<std::uint8_t *>(kIconRgba), kIconSize * 4);
+    SDL_Surface *icon = SDL_CreateSurfaceFrom(app::kIconSize, app::kIconSize, SDL_PIXELFORMAT_RGBA32,
+                                              const_cast<std::uint8_t *>(app::kIconRgba), app::kIconSize * 4);
     if (icon != nullptr) {
         SDL_SetWindowIcon(g_window, icon);
         SDL_DestroySurface(icon);
