@@ -64,6 +64,7 @@ TEST(SceCoreMcStore, AFileIsAFileUnderTheCardsDirectory) {
 
     std::ifstream file(root / "mc0/SAVE/data", std::ios::binary);
     std::string   text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    file.close();
     EXPECT_EQ(text, "save");
 
     ASSERT_EQ(mc::Chdir(0, "SAVE", nullptr), 0);
