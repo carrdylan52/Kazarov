@@ -207,19 +207,17 @@ TEST(DataExtractEntries, WritesNoTemporaryThroughALink) {
     WriteBytes(dir / "source.bin", Pattern(1000, 13));
     WriteBytes(dir / "victim", Pattern(10, 2));
     fs::create_directories(dir / "out/movie");
-    if (!Linked(dir / "victim", dir / "out/.system.cnf.kztmp", false) ||
-        !Linked(dir / "victim", dir / "out/movie/.open1.pss.kztmp", false)) {
+    fs::path planted = dir / "out/.system.cnf.kztmp";
+    if (!Linked(dir / "victim", planted, false)) {
         fs::remove_all(dir);
         GTEST_SKIP() << "cannot create links here";
     }
+    EXPECT_THROW(kzdata::NewFile{planted}, kzdata::Error);
     Extract(Entries(dir / "source.bin"), dir / "out");
-    EXPECT_EQ(ReadBytes(dir / "victim"), Pattern(10, 2));
-    EXPECT_TRUE(kzdata::Verify(dir / "out").empty());
-    EXPECT_TRUE(NoTemporaries(dir / "out"));
-
-    ASSERT_TRUE(Linked(dir / "victim", dir / "out/.manifest.sha256.kztmp", false));
     kzdata::WriteFile(dir / "out" / kzdata::kManifestFile, Bytes{'#', '\n'});
     EXPECT_EQ(ReadBytes(dir / "victim"), Pattern(10, 2));
+    fs::remove(planted);
+    EXPECT_TRUE(NoTemporaries(dir / "out"));
     fs::remove_all(dir);
 }
 
@@ -272,5 +270,24 @@ TEST(DataExtractEntries, RefusesALinkedRoot) {
     EXPECT_THROW(kzdata::ExtractEntries(Entries(dir / "source.bin"), dir / "out", next), kzdata::Error);
     EXPECT_TRUE(fs::is_empty(dir / "elsewhere"));
     fs::remove(dir / "out");
+    fs::remove_all(dir);
+}
+
+// Two writers of one file, as two extractions into one directory would be: each keeps its own
+// temporary file, so neither renames the other's half-written one into place.
+TEST(DataExtractEntries, TemporaryFilesAreNeverShared) {
+    fs::path dir = TempDir("entries_shared_temporary");
+    fs::create_directories(dir);
+    fs::path target = dir / "file.bin";
+    EXPECT_NE(kzdata::TemporaryBeside(target), kzdata::TemporaryBeside(target));
+    {
+        kzdata::NewFile first(kzdata::TemporaryBeside(target));
+        first.Write(Bytes{'A', 'A', 'A', 'A'});
+        kzdata::NewFile second(kzdata::TemporaryBeside(target));
+        second.Write(Bytes{'B', 'B'});
+        first.Replace(target);
+        EXPECT_EQ(ReadBytes(target), (Bytes{'A', 'A', 'A', 'A'}));
+    }
+    EXPECT_TRUE(NoTemporaries(dir));
     fs::remove_all(dir);
 }

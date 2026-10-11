@@ -1,7 +1,7 @@
 #pragma once
 
 #include <algorithm>
-#include <cerrno>
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -11,6 +11,7 @@
 #include <functional>
 #include <map>
 #include <optional>
+#include <random>
 #include <span>
 #include <string>
 #include <string_view>
@@ -21,6 +22,7 @@
 #ifdef _WIN32
 #include <fcntl.h>
 #include <io.h>
+#include <process.h>
 #include <share.h>
 #include <sys/stat.h>
 #else
@@ -89,30 +91,32 @@ inline std::vector<unsigned char> ReadFile(const fs::path &path) {
     return data;
 }
 
+// A name beside path no other call, here or in another process, gives: two extractions into one
+// directory must never write, or rename, each other's temporary file.
 inline fs::path TemporaryBeside(const fs::path &path) {
-    return path.parent_path() / ("." + path.filename().string() + ".kztmp");
+    static std::atomic<std::uint64_t> counter = 0;
+    static const std::uint64_t        salt = std::random_device{}();
+#ifdef _WIN32
+    int process = _getpid();
+#else
+    int process = ::getpid();
+#endif
+    return path.parent_path() / std::format(".{}.{}.{:x}.{}.kztmp", path.filename().string(), process, salt,
+                                            counter.fetch_add(1));
 }
 
-// A new file, never an existing one or what a link at its path points to: a link planted at the
-// predictable temporary name would otherwise be written through.
+// A new file at path, never an existing one or what a link there points to.
 class NewFile {
 public:
     explicit NewFile(const fs::path &path) : path_(path) {
-        for (int attempt = 0; attempt < 2 && fd_ < 0; attempt++) {
 #ifdef _WIN32
-            // _O_CREAT | _O_EXCL is CreateFile's CREATE_NEW, which fails on any existing name,
-            // a link included, rather than following it.
-            _wsopen_s(&fd_, path.c_str(), _O_WRONLY | _O_CREAT | _O_EXCL | _O_BINARY | _O_NOINHERIT, _SH_DENYRW,
-                      _S_IREAD | _S_IWRITE);
+        // _O_CREAT | _O_EXCL is CreateFile's CREATE_NEW, which fails on any existing name, a link
+        // included, rather than following it.
+        _wsopen_s(&fd_, path.c_str(), _O_WRONLY | _O_CREAT | _O_EXCL | _O_BINARY | _O_NOINHERIT, _SH_DENYRW,
+                  _S_IREAD | _S_IWRITE);
 #else
-            fd_ = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644);
+        fd_ = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644);
 #endif
-            if (fd_ < 0 && errno == EEXIST && attempt == 0) {
-                // An interrupted run's leftover; removing a link removes the link, not its target.
-                std::error_code ignored;
-                fs::remove(path, ignored);
-            }
-        }
         if (fd_ < 0) {
             Fail("cannot create {}", path.string());
         }
