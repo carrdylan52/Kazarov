@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -38,21 +39,29 @@ inline std::string FoldPath(std::string_view path) {
     return out;
 }
 
-inline bool IsSafeRelative(std::string_view path) {
-    if (path.empty() || path.back() == '/') {
-        return false;
+// The path with '/' for every separator, or none when it could leave the directory it is
+// relative to: empty, absolute, with a drive or device prefix, an empty, "." or ".." component, or
+// a component ending in a dot or space, which Windows strips (so "... " can mean "..").
+inline std::optional<std::string> SafeRelative(std::string_view path) {
+    std::string normal(path);
+    std::ranges::replace(normal, '\\', '/');
+    if (normal.empty() || normal.find_first_of(std::string_view(":\0", 2)) != std::string::npos) {
+        return std::nullopt;
     }
     std::size_t start = 0;
-    while (start <= path.size()) {
-        std::size_t      end = std::min(path.find('/', start), path.size());
-        std::string_view component = path.substr(start, end - start);
-        if (component.empty() || component == "." || component == ".." ||
-            component.find(':') != std::string_view::npos) {
-            return false;
+    while (start <= normal.size()) {
+        std::size_t      end = std::min(normal.find('/', start), normal.size());
+        std::string_view component = std::string_view(normal).substr(start, end - start);
+        if (component.empty() || component.back() == '.' || component.back() == ' ') {
+            return std::nullopt;
         }
         start = end + 1;
     }
-    return true;
+    return normal;
+}
+
+inline bool IsSafeRelative(std::string_view path) {
+    return SafeRelative(path).has_value();
 }
 
 } // namespace kzdata

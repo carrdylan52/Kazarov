@@ -147,7 +147,7 @@ inline Manifest ReadManifest(const fs::path &root) {
         } catch (const std::exception &) {
             Fail("{} line {}: bad number", (root / kManifestFile).string(), number);
         }
-        if (row.sha256.size() != 64 || !IsSafeRelative(path) || !manifest.emplace(path, row).second) {
+        if (row.sha256.size() != 64 || SafeRelative(path) != path || !manifest.emplace(path, row).second) {
             Fail("{} line {}: bad row", (root / kManifestFile).string(), number);
         }
     }
@@ -169,7 +169,7 @@ inline void WriteManifest(const fs::path &root, const Manifest &manifest) {
 inline void CheckEntries(std::span<const Entry> entries, const fs::path &out, const Manifest &taken = {}) {
     std::unordered_set<std::string> files;
     for (const Entry &entry : entries) {
-        if (!IsSafeRelative(entry.path) || entry.path.find_first_of("\t\n\r") != std::string::npos ||
+        if (SafeRelative(entry.path) != entry.path || entry.path.find_first_of("\t\n\r") != std::string::npos ||
             entry.path == kManifestFile) {
             Fail("unusable path \"{}\"", entry.path);
         }

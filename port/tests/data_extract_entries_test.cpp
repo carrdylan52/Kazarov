@@ -150,3 +150,21 @@ TEST(DataExtractEntries, ManifestRejectsDamage) {
     EXPECT_THROW(kzdata::ReadManifest(dir), kzdata::Error);
     fs::remove_all(dir);
 }
+
+TEST(DataExtractEntries, RefusesBackslashesThatLeaveTheRoot) {
+    fs::path dir = TempDir("entries_backslash");
+    WriteBytes(dir / "source.bin", Pattern(100, 11));
+    kzdata::Manifest next;
+    for (const char *path : {"..\\a.bin", "a\\b.bin", "c:a.bin"}) {
+        EXPECT_THROW(kzdata::ExtractEntries(std::vector<kzdata::Entry>{{path, {dir / "source.bin", 0, 10}}},
+                                            dir / "out", {}, next),
+                     kzdata::Error)
+            << path;
+    }
+    EXPECT_FALSE(fs::exists(dir / "out"));
+    std::string row = std::string(64, 'a') + "\t1\ts@1\t0\t..\\escape\n";
+    fs::create_directories(dir / "m");
+    WriteBytes(dir / "m" / kzdata::kManifestFile, Bytes(row.begin(), row.end()));
+    EXPECT_THROW(kzdata::ReadManifest(dir / "m"), kzdata::Error);
+    fs::remove_all(dir);
+}
