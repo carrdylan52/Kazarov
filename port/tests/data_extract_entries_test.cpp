@@ -259,3 +259,18 @@ TEST(DataExtractEntries, KeepsOnlyFilesHoldingTheExtentsBytes) {
     EXPECT_TRUE(kzdata::Verify(dir / "out").empty());
     fs::remove_all(dir);
 }
+
+TEST(DataExtractEntries, RefusesALinkedRoot) {
+    fs::path dir = TempDir("entries_linked_root");
+    WriteBytes(dir / "source.bin", Pattern(1000, 18));
+    fs::create_directories(dir / "elsewhere");
+    if (!Linked(dir / "elsewhere", dir / "out", true)) {
+        fs::remove_all(dir);
+        GTEST_SKIP() << "cannot create links here";
+    }
+    kzdata::Manifest next;
+    EXPECT_THROW(kzdata::ExtractEntries(Entries(dir / "source.bin"), dir / "out", next), kzdata::Error);
+    EXPECT_TRUE(fs::is_empty(dir / "elsewhere"));
+    fs::remove(dir / "out");
+    fs::remove_all(dir);
+}

@@ -263,16 +263,24 @@ inline void WriteManifest(const fs::path &root, const Manifest &manifest) {
               std::span(reinterpret_cast<const unsigned char *>(text.data()), text.size()));
 }
 
-// The first link (or junction, or anything else neither a file nor a directory) below `out` on the
-// way to `path`, or at it: it would take a write or a read outside `out`. `out` itself may be one.
+// Whether the path is a link, a junction or anything else neither a file nor a directory.
+inline bool IsLinkLike(const fs::path &path) {
+    std::error_code error;
+    fs::file_status status = fs::symlink_status(path, error);
+    return fs::is_symlink(status) ||
+           (fs::exists(status) && !fs::is_regular_file(status) && !fs::is_directory(status));
+}
+
+// The first link (or junction) from `out` itself down to `path`: it would take a write or a read
+// outside `out`.
 inline std::optional<fs::path> LinkOnTheWay(const fs::path &out, std::string_view path) {
     fs::path at = out;
+    if (IsLinkLike(at)) {
+        return at;
+    }
     for (const fs::path &component : fs::path(path)) {
         at /= component;
-        std::error_code error;
-        fs::file_status status = fs::symlink_status(at, error);
-        if (fs::is_symlink(status) ||
-            (fs::exists(status) && !fs::is_regular_file(status) && !fs::is_directory(status))) {
+        if (IsLinkLike(at)) {
             return at;
         }
     }
@@ -341,6 +349,7 @@ inline Result ExtractEntries(std::span<const Entry> entries, const fs::path &out
         }
     };
 
+    RefuseLinks(out, "");
     fs::create_directories(out);
     std::vector<unsigned char> chunk(4 << 20);
     std::vector<unsigned char> held;
