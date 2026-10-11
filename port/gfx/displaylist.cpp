@@ -250,8 +250,8 @@ void NoteScene(DisplayList &list, const MeshRecord &record) {
 }
 
 bool CoversLogicalFrame(const LogicalRect &rect) {
-    return rect.x <= 0.0f && rect.y <= 0.0f && rect.x + rect.w >= kLogicalWidth &&
-           rect.y + rect.h >= kLogicalHeight;
+    return rect.x <= 0.0f && rect.y <= 0.0f && rect.x + rect.w >= LogicalWidth() &&
+           rect.y + rect.h >= LogicalHeight();
 }
 
 void NoteMainDraw(DisplayList &list) {

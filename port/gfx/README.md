@@ -32,27 +32,28 @@ units include `"gfx/gfx.hpp"`.
 
 ## Spaces
 
-- **Logical space** is the game's 640x480, y down. `Draw2D` vertices, `DrawState::scissor_rect`,
+- **Logical space** is the game's frame, `config.logical_width x logical_height` (L, below), y
+  down. `Draw2D` vertices, `DrawState::scissor_rect`,
   `Clear` rects, `ReadDepth` rects and copy rects on `kMainTarget`/`kPreviousFrame` are in it.
 - On the **main target** (window pixel size) logical space is scaled by
-  `min(W / 640, H / 480)` and centred with whole-pixel offsets, so the 640x480 frame always fits
-  the window. Coordinates outside 0..640 x 0..480 reach past the frame; nothing clips to the 4:3
+  `min(W / Lw, H / Lh)` and centred with whole-pixel offsets, so the logical frame always fits
+  the window. Coordinates outside 0..Lw x 0..Lh reach past the frame; nothing clips to the
   area unless a scissor says so. `GetLogicalMapping(target)` returns
   `pixel = logical * scale + offset`. What the window shows past the frame depends on the frame
   layout ("Aspect").
 - A **render target** is `logical_width x logical_height` scaled by the render scale (pixels per
-  logical texel; `config.render_scale`, 0 = `round(window height / 480)`, at least 1), offset 0.
+  logical texel; `config.render_scale`, 0 = `round(window height / Lh)`, at least 1), offset 0.
   `SetRenderScale` recreates every render target, blitting its contents over.
 - A render target created with **`share_main_depth`** (`CreateRenderTarget`, `NamedRenderTarget`)
   has no depth buffer of its own: drawing into it tests and writes the main target's depth and
   stencil as drawn so far this frame, which is how the GS draws into another FRAME_1 with the same
   ZBUF (shadow volumes counted into `shadow_buf` against the scene). Its pixels must line up with
-  the main target's, so it is the main target's pixel size and mapped like it (640x480 logical,
+  the main target's, so it is the main target's pixel size and mapped like it (the logical frame,
   letterboxed) whatever size is asked for, ignores the render scale, and is recreated with the
   main target on resize (contents lost). `Clear` of depth or `ClearStencil` while it is the target
   clears the main target's.
 - **Texture coordinates** in `Draw2D` are logical texels of the texture (its `TextureDesc` size,
-  or its logical size for render targets, 640x480 for `kPreviousFrame`). In `Vertex3D` they are
+  or its logical size for render targets, the logical frame for `kPreviousFrame`). In `Vertex3D` they are
   normalised.
 - **Meshes** draw over the whole target (not letterboxed). With `kMeshScreenUv` a vertex samples
   an image of the target where it lands itself, `Vertex3D::uv` an offset from there. `MeshConstants::mvp` (column-major)

@@ -44,6 +44,8 @@ struct GfxFixture {
         window.vulkan = !options.offscreen;
         WindowInit(window);
         gfx::RendererConfig config;
+        config.logical_width = 640;
+        config.logical_height = 480;
         config.validation = true;
         config.render_scale = render_scale;
         config.dynamic_color_write_mask = options.dynamic_color_write_mask;

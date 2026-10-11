@@ -779,6 +779,9 @@ void RendererInit(SDL_Window *window, const RendererConfig &config) {
     g.renderer_instance = ++instances;
     g.window = window;
     g.config = config;
+    if (config.logical_width == 0 || config.logical_height == 0) {
+        Fatal("RendererConfig has no logical frame size");
+    }
     g.offscreen = config.offscreen;
     g.layout = config.layout;
     CreateInstance();
@@ -803,7 +806,7 @@ void RendererInit(SDL_Window *window, const RendererConfig &config) {
     g.render_scale =
         config.render_scale > 0.0f
             ? config.render_scale
-            : std::max(1.0f, std::round(static_cast<float>(g.swapchain.extent.height) / kLogicalHeight));
+            : std::max(1.0f, std::round(static_cast<float>(g.swapchain.extent.height) / LogicalHeight()));
     CreatePipelines();
 }
 
@@ -1111,6 +1114,15 @@ bool PresentCanonical() {
 }
 
 bool InFrame() { return g.in_frame || g.list != nullptr; }
+
+float LogicalWidth() { return static_cast<float>(g.config.logical_width); }
+
+float LogicalHeight() { return static_cast<float>(g.config.logical_height); }
+
+UiAnchor UiAnchorThirds() {
+    return {LogicalWidth() / 3.0f, LogicalWidth() * 2.0f / 3.0f, LogicalHeight() / 3.0f,
+            LogicalHeight() * 2.0f / 3.0f};
+}
 
 RendererFeatures ActiveRendererFeatures() {
     return {g.properties.apiVersion, g.offscreen, g.triangle_fans, g.separate_stencil_masks,

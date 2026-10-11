@@ -183,13 +183,13 @@ void UiSideShift(UiSide side, const LogicalMapping &logical, const LogicalMappin
         dx = visible.x * logical.scale_x + logical.offset_x - ui.offset_x;
     } else if (side.x > 0) {
         dx = (visible.x + visible.w) * logical.scale_x + logical.offset_x -
-             (kLogicalWidth * ui.scale_x + ui.offset_x);
+             (LogicalWidth() * ui.scale_x + ui.offset_x);
     }
     if (side.y < 0) {
         dy = visible.y * logical.scale_y + logical.offset_y - ui.offset_y;
     } else if (side.y > 0) {
         dy = (visible.y + visible.h) * logical.scale_y + logical.offset_y -
-             (kLogicalHeight * ui.scale_y + ui.offset_y);
+             (LogicalHeight() * ui.scale_y + ui.offset_y);
     }
     dx = std::round(dx);
     dy = std::round(dy);
@@ -742,11 +742,11 @@ void Transfer(VkCommandBuffer cmd, Image &src, const VkOffset3D src_offsets[2], 
 LogicalMapping MainMapping(uint32_t width, uint32_t height) {
     float w = static_cast<float>(width);
     float h = static_cast<float>(height);
-    float scale = std::min(w / kLogicalWidth, h / kLogicalHeight);
+    float scale = std::min(w / LogicalWidth(), h / LogicalHeight());
     return LogicalMapping{scale,
                           scale,
-                          std::floor((w - kLogicalWidth * scale) * 0.5f),
-                          std::floor((h - kLogicalHeight * scale) * 0.5f),
+                          std::floor((w - LogicalWidth() * scale) * 0.5f),
+                          std::floor((h - LogicalHeight() * scale) * 0.5f),
                           width,
                           height};
 }
@@ -756,14 +756,14 @@ LogicalMapping UiMapping(const LogicalMapping &mapping) {
     if (scale == 1.0f) {
         return mapping;
     }
-    float centre_x = kLogicalWidth * 0.5f * mapping.scale_x + mapping.offset_x;
-    float centre_y = kLogicalHeight * 0.5f * mapping.scale_y + mapping.offset_y;
+    float centre_x = LogicalWidth() * 0.5f * mapping.scale_x + mapping.offset_x;
+    float centre_y = LogicalHeight() * 0.5f * mapping.scale_y + mapping.offset_y;
     float scale_x = mapping.scale_x * scale;
     float scale_y = mapping.scale_y * scale;
     return LogicalMapping{scale_x,
                           scale_y,
-                          std::round(centre_x - kLogicalWidth * 0.5f * scale_x),
-                          std::round(centre_y - kLogicalHeight * 0.5f * scale_y),
+                          std::round(centre_x - LogicalWidth() * 0.5f * scale_x),
+                          std::round(centre_y - LogicalHeight() * 0.5f * scale_y),
                           mapping.pixel_width,
                           mapping.pixel_height};
 }
@@ -797,7 +797,7 @@ uint32_t ExtentAxes(TextureHandle handle) {
 LogicalRect LogicalFrame(TextureHandle handle) {
     const Texture *texture = handle == kMainTarget ? nullptr : LookupTexture(handle);
     if (texture == nullptr) {
-        return {0.0f, 0.0f, kLogicalWidth, kLogicalHeight};
+        return {0.0f, 0.0f, LogicalWidth(), LogicalHeight()};
     }
     return {0.0f, 0.0f, static_cast<float>(texture->logical_width),
             static_cast<float>(texture->logical_height)};
@@ -1241,7 +1241,7 @@ bool SnapshotFrame(TextureHandle dst) {
         return false;
     }
     return BlitTexture(kMainTarget,
-                       Rect{0, 0, static_cast<int32_t>(kLogicalWidth), static_cast<int32_t>(kLogicalHeight)},
+                       Rect{0, 0, static_cast<int32_t>(LogicalWidth()), static_cast<int32_t>(LogicalHeight())},
                        dst, Rect{0, 0, static_cast<int32_t>(info->width), static_cast<int32_t>(info->height)},
                        Filter::Linear);
 }

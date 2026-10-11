@@ -17,11 +17,6 @@ struct SDL_Window;
 // colour and alpha units, reverse-Z and how GS blending maps onto Vulkan.
 namespace gfx {
 
-// The game's 2D space. 2D draws, scissors and main-target rectangles are given in it and mapped
-// to the target, letterboxed on the main target.
-inline constexpr float kLogicalWidth = 640.0f;
-inline constexpr float kLogicalHeight = 480.0f;
-
 inline constexpr uint32_t kDepthQueryCount = 16;
 
 // How the logical frame meets a window of another shape (README, "Aspect").
@@ -57,8 +52,7 @@ struct UiAnchor {
 };
 
 // The frame in thirds: its corners, edges and centre each keep their own place.
-inline constexpr UiAnchor kUiAnchorThirds = {kLogicalWidth / 3.0f, kLogicalWidth * 2.0f / 3.0f,
-                                             kLogicalHeight / 3.0f, kLogicalHeight * 2.0f / 3.0f};
+UiAnchor UiAnchorThirds();
 
 enum class PresentMode : uint8_t {
     Fifo,
@@ -68,6 +62,10 @@ enum class PresentMode : uint8_t {
 };
 
 struct RendererConfig {
+    // The game's 2D space. 2D draws, scissors and main-target rectangles are given in it and mapped
+    // to the target, letterboxed on the main target.
+    uint32_t              logical_width = 0;
+    uint32_t              logical_height = 0;
     PresentMode           present_mode = PresentMode::Fifo;
     std::filesystem::path pipeline_cache = "save/pipeline_cache.bin";
     // Pixels per logical texel of render targets; 0 derives it from the window height at init.
@@ -108,6 +106,8 @@ struct RendererFeatures {
 // has what the renderer needs and can drive the window (any device with a graphics queue, offscreen).
 void             RendererInit(SDL_Window *window, const RendererConfig &config);
 RendererFeatures ActiveRendererFeatures();
+float            LogicalWidth();
+float            LogicalHeight();
 // Whether the Vulkan loader offers VK_EXT_headless_surface, which SDL's offscreen driver needs for a
 // Vulkan window; without it a headless run renders offscreen. Callable before RendererInit.
 bool HeadlessSurfaceAvailable();
@@ -146,7 +146,7 @@ inline constexpr TextureHandle kNullTexture = 0;
 // The frame being drawn. A render target and a copy source or destination, never sampled.
 inline constexpr TextureHandle kMainTarget = 1;
 // The frame before this one: the last canonical render of a display list, or the last frame
-// EndFrame finished. Sampled like a texture in logical 640x480 space.
+// EndFrame finished. Sampled like a texture in logical space.
 inline constexpr TextureHandle kPreviousFrame = 2;
 
 enum class TextureFormat : uint8_t {
@@ -185,7 +185,7 @@ TextureHandle CreatePalette();
 //
 // With share_main_depth it has no depth buffer of its own: drawing into it tests and writes the
 // main target's depth and stencil, as drawn so far this frame. It is then the main target's pixel
-// size and mapped like it (640x480 logical, letterboxed), whatever size is asked for, follows the
+// size and mapped like it (the logical frame, letterboxed), whatever size is asked for, follows the
 // main target through resizes (contents lost, like the main target's) and ignores the render
 // scale. A Clear of depth or stencil on it clears the main target's.
 //
@@ -359,7 +359,7 @@ struct DrawState {
     bool        texa_aem = true;
     uint8_t     texa_ta0 = 0x80;
     bool        scissor = false;
-    LogicalRect scissor_rect = {0.0f, 0.0f, kLogicalWidth, kLogicalHeight};
+    LogicalRect scissor_rect = {};
     // Faces are told apart by winding, as for culling; lines are front faces.
     bool        stencil_test = false;
     StencilFace stencil_front;
@@ -457,7 +457,7 @@ void DrawMeshImmediate(std::span<const Vertex3D> vertices, std::span<const uint3
 
 // ---- Targets, copies, blits ------------------------------------------------------------------
 
-// Texels of the texture's logical size; kMainTarget and kPreviousFrame are 640x480 logical.
+// Texels of the texture's logical size; kMainTarget and kPreviousFrame are the logical frame.
 // A negative width or height mirrors a blit.
 struct Rect {
     int32_t x;
@@ -509,7 +509,7 @@ void Clear(bool clear_color, const uint8_t color[4], bool clear_depth, float dep
 void ClearStencil(uint8_t value, const LogicalRect *rect = nullptr);
 bool CopyTexture(TextureHandle src, Rect src_rect, TextureHandle dst, int32_t dst_x, int32_t dst_y);
 bool BlitTexture(TextureHandle src, Rect src_rect, TextureHandle dst, Rect dst_rect, Filter filter);
-// The main target's logical 640x480, as drawn so far this frame, stretched over all of dst.
+// The main target's logical frame, as drawn so far this frame, stretched over all of dst.
 bool SnapshotFrame(TextureHandle dst);
 
 // ---- Readback --------------------------------------------------------------------------------

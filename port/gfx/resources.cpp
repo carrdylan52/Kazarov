@@ -178,7 +178,7 @@ LogicalMapping TextureMapping(const Texture &texture) {
         LogicalMapping main = MainMapping(g.main_color[0].width, g.main_color[0].height);
         float          rows =
             static_cast<float>(texture.image.height) / static_cast<float>(texture.logical_height);
-        return LogicalMapping{main.scale_x * kLogicalWidth / static_cast<float>(texture.logical_width),
+        return LogicalMapping{main.scale_x * LogicalWidth() / static_cast<float>(texture.logical_width),
                               rows,
                               main.offset_x,
                               0.0f,
@@ -548,8 +548,8 @@ TextureHandle CreatePalette() { return CreateTexture(TextureDesc{256, 1, Texture
 TextureHandle CreateRenderTarget(uint32_t logical_width, uint32_t logical_height, bool has_alpha,
                                  bool share_main_depth, bool frame_target) {
     if (share_main_depth) {
-        logical_width = static_cast<uint32_t>(kLogicalWidth);
-        logical_height = static_cast<uint32_t>(kLogicalHeight);
+        logical_width = static_cast<uint32_t>(LogicalWidth());
+        logical_height = static_cast<uint32_t>(LogicalHeight());
         frame_target = false;
     }
     Texture shape;
@@ -712,8 +712,8 @@ bool UpdatePalette(TextureHandle palette, const uint32_t *rgba, uint32_t first, 
 std::optional<TextureInfo> GetTextureInfo(TextureHandle handle) {
     if (handle == kMainTarget || handle == kPreviousFrame) {
         const Image &image = *ColorImageOf(handle);
-        return TextureInfo{static_cast<uint32_t>(kLogicalWidth),
-                           static_cast<uint32_t>(kLogicalHeight),
+        return TextureInfo{static_cast<uint32_t>(LogicalWidth()),
+                           static_cast<uint32_t>(LogicalHeight()),
                            image.width,
                            image.height,
                            TextureFormat::Rgba8,
