@@ -184,6 +184,48 @@ inline void WriteFile(const fs::path &path, std::span<const unsigned char> data)
     file.Replace(path);
 }
 
+// Whether the path is a link, a junction or anything else neither a file nor a directory.
+inline bool IsLinkLike(const fs::path &path) {
+    std::error_code error;
+    fs::file_status status = fs::symlink_status(path, error);
+    return fs::is_symlink(status) ||
+           (fs::exists(status) && !fs::is_regular_file(status) && !fs::is_directory(status));
+}
+
+// The first link (or junction) from `out` itself down to `path`: it would take a write or a read
+// outside `out`.
+inline std::optional<fs::path> LinkOnTheWay(const fs::path &out, std::string_view path) {
+    fs::path at = out;
+    if (IsLinkLike(at)) {
+        return at;
+    }
+    for (const fs::path &component : fs::path(path)) {
+        at /= component;
+        if (IsLinkLike(at)) {
+            return at;
+        }
+    }
+    return std::nullopt;
+}
+
+inline void RefuseLinks(const fs::path &out, std::string_view path) {
+    if (std::optional<fs::path> link = LinkOnTheWay(out, path)) {
+        Fail("{} is a link", link->string());
+    }
+}
+
+// The temporary file for out/<path>, its directories made. The links are looked for again after
+// they are made and right before the file is created, which narrows the window a directory could
+// be swapped for a link in without closing it. That is enough for the threat model: extraction is
+// local and single-user, into the user's own data directory, serialised by the launcher's lock,
+// so whoever can swap a directory there already controls the user's files.
+inline NewFile CreateTemporary(const fs::path &out, std::string_view path) {
+    fs::path target = out / fs::path(path);
+    fs::create_directories(target.parent_path());
+    RefuseLinks(out, path);
+    return NewFile(TemporaryBeside(target));
+}
+
 inline std::string SourceIdentity(const fs::path &file) {
     std::error_code error;
     std::uint64_t   size = fs::file_size(file, error);
@@ -269,38 +311,10 @@ inline void WriteManifest(const fs::path &root, const Manifest &manifest) {
     for (const auto &[path, row] : manifest) {
         text += std::format("{}\t{}\t{}\t{}\t{}\n", row.sha256, row.size, row.source, row.offset, path);
     }
-    WriteFile(root / kManifestFile,
-              std::span(reinterpret_cast<const unsigned char *>(text.data()), text.size()));
-}
-
-// Whether the path is a link, a junction or anything else neither a file nor a directory.
-inline bool IsLinkLike(const fs::path &path) {
-    std::error_code error;
-    fs::file_status status = fs::symlink_status(path, error);
-    return fs::is_symlink(status) ||
-           (fs::exists(status) && !fs::is_regular_file(status) && !fs::is_directory(status));
-}
-
-// The first link (or junction) from `out` itself down to `path`: it would take a write or a read
-// outside `out`.
-inline std::optional<fs::path> LinkOnTheWay(const fs::path &out, std::string_view path) {
-    fs::path at = out;
-    if (IsLinkLike(at)) {
-        return at;
-    }
-    for (const fs::path &component : fs::path(path)) {
-        at /= component;
-        if (IsLinkLike(at)) {
-            return at;
-        }
-    }
-    return std::nullopt;
-}
-
-inline void RefuseLinks(const fs::path &out, std::string_view path) {
-    if (std::optional<fs::path> link = LinkOnTheWay(out, path)) {
-        Fail("{} is a link", link->string());
-    }
+    NewFile file = CreateTemporary(root, kManifestFile);
+    file.Write(std::span(reinterpret_cast<const unsigned char *>(text.data()), text.size()));
+    RefuseLinks(root, kManifestFile);
+    file.Replace(root / kManifestFile);
 }
 
 // Everything that would make the output ambiguous or escape `out` is refused before a byte is
@@ -377,10 +391,7 @@ inline Result ExtractEntries(std::span<const Entry> entries, const fs::path &out
                 continue;
             }
         }
-        // A directory made a link since CheckEntries looked would take the write elsewhere.
-        RefuseLinks(out, entry.path);
-        fs::create_directories(target.parent_path());
-        NewFile       file(TemporaryBeside(target));
+        NewFile       file = CreateTemporary(out, entry.path);
         Sha256        hash;
         Reader        reader(entry.extent.file);
         std::uint64_t offset = entry.extent.offset;
@@ -394,6 +405,7 @@ inline Result ExtractEntries(std::span<const Entry> entries, const fs::path &out
             done.bytes += step;
             report();
         }
+        RefuseLinks(out, entry.path);
         file.Replace(target);
         next[entry.path] = {hash.FinishHex(), entry.extent.size, source, entry.extent.offset};
         result.written++;

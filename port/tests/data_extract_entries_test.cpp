@@ -303,3 +303,23 @@ TEST(DataExtractEntries, AFailedRenameLeavesNoTemporary) {
     EXPECT_TRUE(NoTemporaries(dir));
     fs::remove_all(dir);
 }
+
+TEST(DataExtractEntries, TemporaryFilesAreCreatedOnlyUnderTheRoot) {
+    fs::path dir = TempDir("entries_create_under");
+    fs::create_directories(dir / "out");
+    {
+        kzdata::NewFile file = kzdata::CreateTemporary(dir / "out", "new/deeper/a.bin");
+        file.Write(Bytes{'x'});
+        file.Replace(dir / "out/new/deeper/a.bin");
+    }
+    EXPECT_EQ(ReadBytes(dir / "out/new/deeper/a.bin"), Bytes{'x'});
+    fs::create_directories(dir / "elsewhere");
+    if (!Linked(dir / "elsewhere", dir / "out/movie", true)) {
+        fs::remove_all(dir);
+        GTEST_SKIP() << "cannot create links here";
+    }
+    EXPECT_THROW(kzdata::CreateTemporary(dir / "out", "movie/open1.pss"), kzdata::Error);
+    EXPECT_TRUE(fs::is_empty(dir / "elsewhere"));
+    fs::remove(dir / "out/movie");
+    fs::remove_all(dir);
+}
