@@ -127,7 +127,8 @@ void CreateInstance() {
     app.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
     app.pEngineName = "Kazarov";
     app.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-    app.apiVersion = VK_API_VERSION_1_4;
+    app.apiVersion = InstanceApiVersion(g.config.min_api_version);
+    g.instance_api_version = app.apiVersion;
 
     VkDebugUtilsMessengerCreateInfoEXT messenger = {};
     messenger.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
@@ -1132,7 +1133,7 @@ UiAnchor UiAnchorThirds() {
 }
 
 RendererFeatures ActiveRendererFeatures() {
-    return {g.properties.apiVersion, g.offscreen, g.triangle_fans, g.separate_stencil_masks,
+    return {g.properties.apiVersion, g.instance_api_version, g.offscreen, g.triangle_fans, g.separate_stencil_masks,
             g.dynamic_color_write_mask, g.portability_subset};
 }
 

@@ -36,6 +36,9 @@ bool       HasExtension(const DeviceCaps &caps, const char *name);
 // calls was introduced by 1.4, so min_api_version, the game's floor, is 1.3 or 1.4 by the game's choice.
 std::vector<std::string> MissingRequirements(const DeviceCaps &caps, bool offscreen, uint32_t min_api_version);
 std::string              VersionName(uint32_t version);
+// The apiVersion the instance asks for: the game's floor. A 1.0 loader refuses anything higher, and
+// a higher one would claim the renderer may use what a 1.3 device does not have.
+uint32_t                 InstanceApiVersion(uint32_t min_api_version);
 // Portability-subset features the renderer works around (it does not need them), for the log.
 std::vector<std::string> PortabilityWorkarounds(const DeviceCaps &caps);
 

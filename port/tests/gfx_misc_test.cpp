@@ -146,6 +146,14 @@ TEST(GfxMisc, MinApiVersion) {
     EXPECT_TRUE(gfx::detail::MissingRequirements(caps, true, VK_API_VERSION_1_4).empty());
 }
 
+TEST(GfxMisc, InstanceAsksForTheGamesFloor) {
+    EXPECT_EQ(gfx::detail::InstanceApiVersion(VK_API_VERSION_1_3), VK_API_VERSION_1_3);
+    EXPECT_EQ(gfx::detail::InstanceApiVersion(VK_API_VERSION_1_4), VK_API_VERSION_1_4);
+    ASSERT_EQ(app::kMinVulkanVersion, VK_API_VERSION_1_3);
+    GfxFixture fixture;
+    EXPECT_EQ(gfx::ActiveRendererFeatures().instance_api_version, VK_API_VERSION_1_3);
+}
+
 TEST(GfxMisc, TextureLimits) {
     GfxFixture fixture;
     // Past the device's maxImageDimension2D: an error, not a crash.

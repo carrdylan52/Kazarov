@@ -96,7 +96,8 @@ struct RendererConfig {
 
 // What RendererInit settled on, from the config and the device.
 struct RendererFeatures {
-    uint32_t api_version;
+    uint32_t api_version;          // the device's
+    uint32_t instance_api_version; // what the renderer asked of the loader
     bool     offscreen;
     bool     triangle_fans;
     bool     separate_stencil_masks;

@@ -336,7 +336,8 @@ the device's capabilities.
 
 Nothing the renderer calls was introduced by Vulkan 1.4, so 1.3 is the renderer's floor. Each game
 sets its own with `kz_port_library(… MIN_VULKAN 1.3|1.4)`, which `RendererConfig::min_api_version`
-overrides when set; the loader and every device are checked against it.
+overrides when set; the loader and every device are checked against it, and it is the instance's
+`apiVersion`.
 
 | Requirement | Introduced by |
 |---|---|

@@ -83,6 +83,10 @@ bool HasExtension(const DeviceCaps &caps, const char *name) {
     return std::ranges::find(caps.extensions, name) != caps.extensions.end();
 }
 
+uint32_t InstanceApiVersion(uint32_t min_api_version) {
+    return min_api_version;
+}
+
 std::vector<std::string> MissingRequirements(const DeviceCaps &caps, bool offscreen, uint32_t min_api_version) {
     std::vector<std::string> missing;
     auto                     need = [&](bool present, const char *what) {

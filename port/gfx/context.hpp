@@ -328,6 +328,7 @@ struct Context {
     bool presented_display = false;
 
     uint32_t validation_messages = 0;
+    uint32_t instance_api_version = 0;
 };
 
 extern Context g;
