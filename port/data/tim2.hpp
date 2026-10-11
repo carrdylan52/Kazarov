@@ -1,0 +1,227 @@
+#pragma once
+
+#include <cstdint>
+#include <cstring>
+#include <optional>
+#include <span>
+#include <vector>
+
+namespace kzdata::tim2 {
+
+// The order of the games' own texture classes' bpp field, not TIM2's image type numbering.
+enum class Format : int {
+    Index4 = 0,
+    Index8 = 1,
+    Rgb16 = 2,
+    Rgb24 = 3,
+    Rgb32 = 4,
+};
+
+inline std::optional<Format> FormatOfImageType(int image_type) {
+    switch (image_type) {
+        case 1: return Format::Rgb16;
+        case 2: return Format::Rgb24;
+        case 3: return Format::Rgb32;
+        case 4: return Format::Index4;
+        case 5: return Format::Index8;
+        default: return std::nullopt;
+    }
+}
+
+inline unsigned Read16(const unsigned char *p) {
+    return p[0] | p[1] << 8;
+}
+
+inline std::uint32_t Read32(const unsigned char *p) {
+    return p[0] | p[1] << 8 | p[2] << 16 | static_cast<std::uint32_t>(p[3]) << 24;
+}
+
+struct Picture {
+    std::size_t   offset = 0; // of its header, in the file
+    std::uint32_t total_size = 0;
+    std::uint32_t clut_size = 0;
+    std::uint32_t image_size = 0;
+    unsigned      header_size = 0;
+    unsigned      clut_colors = 0;
+    unsigned      mipmaps = 0;
+    unsigned      clut_type = 0;
+    unsigned      image_type = 0;
+    unsigned      width = 0;
+    unsigned      height = 0;
+    std::size_t   image = 0; // offset of the base level, in the file
+    std::size_t   clut = 0;  // offset of the CLUT, in the file
+};
+
+// The pictures of a TIM2 file. A picture's total size is not trusted (the games' files get it
+// wrong); the header, image and CLUT sizes are, and each must lie inside the file.
+inline std::optional<std::vector<Picture>> Parse(std::span<const unsigned char> file) {
+    if (file.size() < 16 || std::memcmp(file.data(), "TIM2", 4) != 0) {
+        return std::nullopt;
+    }
+    unsigned             count = Read16(file.data() + 6);
+    std::size_t          at = file[5] == 1 ? 128 : 16;
+    std::vector<Picture> pictures;
+    for (unsigned i = 0; i < count; i++) {
+        if (at + 0x30 > file.size()) {
+            return std::nullopt;
+        }
+        const unsigned char *p = file.data() + at;
+        Picture              picture;
+        picture.offset = at;
+        picture.total_size = Read32(p);
+        picture.clut_size = Read32(p + 4);
+        picture.image_size = Read32(p + 8);
+        picture.header_size = Read16(p + 0x0C);
+        picture.clut_colors = Read16(p + 0x0E);
+        picture.mipmaps = p[0x11];
+        picture.clut_type = p[0x12];
+        picture.image_type = p[0x13];
+        picture.width = Read16(p + 0x14);
+        picture.height = Read16(p + 0x16);
+        picture.image = at + picture.header_size;
+        picture.clut = picture.image + picture.image_size;
+        if (picture.header_size < 0x30 || picture.clut > file.size() ||
+            picture.clut_size > file.size() - picture.clut) {
+            return std::nullopt;
+        }
+        pictures.push_back(picture);
+        at = picture.clut + picture.clut_size;
+    }
+    return pictures;
+}
+
+// Where texel (x, y) of an 8-bit picture `width` texels wide lies in pixel data kept in the GS's
+// PSMT8 block order.
+inline std::size_t T8Texel(int x, int y, int width) {
+    return (y & ~0xF) * width + (x & ~0xF) * 2 + ((((y & ~3) >> 1) + (y & 1)) & 7) * width * 2 +
+           ((x + (((y + 2) >> 2) & 1) * 4) & 7) * 4 + ((y >> 1) & 1) + ((x >> 2) & 2);
+}
+
+// The palette entry a CSM1 CLUT image position holds (bits 3 and 4 swapped); its own inverse.
+constexpr unsigned ClutCsm1(unsigned position) {
+    return (position & ~0x18u) | ((position & 0x08u) << 1) | ((position & 0x10u) >> 1);
+}
+
+// The colours of an 8-bit picture's 256-entry CLUT as RGB, in file order, or none.
+inline std::vector<std::uint32_t> Colours256(std::span<const unsigned char> file, const Picture &picture) {
+    if (picture.image_type != 5 || picture.clut_colors != 256 || picture.clut + 1024 > file.size()) {
+        return {};
+    }
+    std::vector<std::uint32_t> colours(256);
+    for (int i = 0; i < 256; i++) {
+        colours[i] = Read32(file.data() + picture.clut + i * 4) & 0xFFFFFF;
+    }
+    return colours;
+}
+
+namespace detail {
+
+// The 8-bit page swizzle's lookup table inverted, per column parity.
+struct InverseLut {
+    std::uint8_t to_output[2][64];
+
+    constexpr InverseLut() : to_output{} {
+        constexpr std::uint8_t lut[128] = {
+            0, 36, 8, 44, 1, 37, 9, 45, 2, 38, 10, 46, 3, 39, 11, 47, 4, 32, 12, 40, 5, 33, 13, 41,
+            6, 34, 14, 42, 7, 35, 15, 43, 16, 52, 24, 60, 17, 53, 25, 61, 18, 54, 26, 62, 19, 55, 27, 63,
+            20, 48, 28, 56, 21, 49, 29, 57, 22, 50, 30, 58, 23, 51, 31, 59, 4, 32, 12, 40, 5, 33, 13, 41,
+            6, 34, 14, 42, 7, 35, 15, 43, 0, 36, 8, 44, 1, 37, 9, 45, 2, 38, 10, 46, 3, 39, 11, 47,
+            20, 48, 28, 56, 21, 49, 29, 57, 22, 50, 30, 58, 23, 51, 31, 59, 16, 52, 24, 60, 17, 53, 25, 61,
+            18, 54, 26, 62, 19, 55, 27, 63};
+        for (unsigned parity = 0; parity < 2; parity++) {
+            for (unsigned m = 0; m < 64; m++) {
+                to_output[parity][lut[parity * 64 + m]] = static_cast<std::uint8_t>(m);
+            }
+        }
+    }
+};
+
+inline constexpr InverseLut kInverseLut;
+
+} // namespace detail
+
+// Where an 8-bit-to-PSMCT32 page swizzle puts texel (x, y) of a width x height image, or -1 where
+// its page-sized work buffers drop it (images narrower than a block).
+inline long SwizzledOffset(int width, int height, int x, int y) {
+    int pages_x = ((width - 1) >> 7) + 1;
+    int pages_y = ((height - 1) >> 6) + 1;
+    int page_width = pages_x == 1 ? width : 128;
+    int row_bytes = pages_x == 1 ? width * 2 : 256;
+    int row_count = pages_y == 1 ? height >> 1 : 32;
+    int page_x = x / page_width;
+    int page_y = y >> 6;
+    int local_x = x - page_x * page_width;
+    int local_y = y & 63;
+    int block_x = local_x >> 4;
+    int block_y = local_y >> 4;
+    int source = (local_y & 15) * 16 + (local_x & 15);
+    int column = source >> 6;
+    int output = column * 64 + detail::kInverseLut.to_output[column & 1][source & 63];
+    int page_row = block_y * 8 + (output >> 5);
+    int page_column = block_x * 32 + (output & 31);
+    if (page_row >= row_count || page_column >= row_bytes) {
+        return -1;
+    }
+    return static_cast<long>(page_y) * pages_x * row_bytes * row_count + static_cast<long>(row_bytes) * page_x +
+           static_cast<long>(page_row) * row_bytes * pages_x + page_column;
+}
+
+inline void Unswizzle8(int width, int height, const unsigned char *swizzled, unsigned char *linear) {
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            long offset = SwizzledOffset(width, height, x, y);
+            linear[static_cast<std::size_t>(y) * width + x] = offset < 0 ? 0 : swizzled[offset];
+        }
+    }
+}
+
+// One level as linear texels: an index byte per texel for the index formats, r,g,b,a bytes
+// otherwise, alpha still in GS units (0x80 opaque). `swizzled`: 8-bit pixels in the page order
+// Unswizzle8 undoes.
+inline void DecodeLevel(Format format, unsigned width, unsigned height, const unsigned char *src, bool swizzled,
+                        std::vector<std::uint8_t> &out) {
+    std::size_t texels = static_cast<std::size_t>(width) * height;
+    switch (format) {
+        case Format::Index4:
+            out.resize(texels);
+            for (std::size_t i = 0; i < texels; i++) {
+                unsigned char pair = src[i >> 1];
+                out[i] = (i & 1) ? pair >> 4 : pair & 0xF;
+            }
+            break;
+        case Format::Index8:
+            out.resize(texels);
+            if (swizzled) {
+                Unswizzle8(static_cast<int>(width), static_cast<int>(height), src, out.data());
+            } else {
+                std::memcpy(out.data(), src, texels);
+            }
+            break;
+        case Format::Rgb16:
+            // The GS widens a channel by shifting it and takes alpha from TEXA by the A bit; the
+            // games never program TEXA for 16-bit images, so the usual TA0 0 / TA1 0x80 is baked in.
+            out.resize(texels * 4);
+            for (std::size_t i = 0; i < texels; i++) {
+                unsigned pixel = src[i * 2] | src[i * 2 + 1] << 8;
+                out[i * 4 + 0] = static_cast<std::uint8_t>((pixel & 0x1F) << 3);
+                out[i * 4 + 1] = static_cast<std::uint8_t>(((pixel >> 5) & 0x1F) << 3);
+                out[i * 4 + 2] = static_cast<std::uint8_t>(((pixel >> 10) & 0x1F) << 3);
+                out[i * 4 + 3] = (pixel & 0x8000) ? 0x80 : 0;
+            }
+            break;
+        case Format::Rgb24:
+            out.resize(texels * 4);
+            for (std::size_t i = 0; i < texels; i++) {
+                out[i * 4 + 0] = src[i * 3 + 0];
+                out[i * 4 + 1] = src[i * 3 + 1];
+                out[i * 4 + 2] = src[i * 3 + 2];
+                out[i * 4 + 3] = 0xFF;
+            }
+            break;
+        case Format::Rgb32:
+            out.assign(src, src + texels * 4);
+            break;
+    }
+}
+
+} // namespace kzdata::tim2
