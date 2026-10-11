@@ -202,58 +202,69 @@ inline constexpr InverseLut kInverseLut;
 
 } // namespace detail
 
-// Where an 8-bit-to-PSMCT32 page swizzle puts texel (x, y) of a width x height image, or -1 where
-// its page-sized work buffers drop it (images narrower than a block).
-inline long SwizzledOffset(int width, int height, int x, int y) {
-    int pages_x = ((width - 1) >> 7) + 1;
-    int pages_y = ((height - 1) >> 6) + 1;
-    int page_width = pages_x == 1 ? width : 128;
-    int row_bytes = pages_x == 1 ? width * 2 : 256;
-    int row_count = pages_y == 1 ? height >> 1 : 32;
-    int page_x = x / page_width;
-    int page_y = y >> 6;
-    int local_x = x - page_x * page_width;
-    int local_y = y & 63;
-    int block_x = local_x >> 4;
-    int block_y = local_y >> 4;
-    int source = (local_y & 15) * 16 + (local_x & 15);
-    int column = source >> 6;
-    int output = column * 64 + detail::kInverseLut.to_output[column & 1][source & 63];
-    int page_row = block_y * 8 + (output >> 5);
-    int page_column = block_x * 32 + (output & 31);
-    if (page_row >= row_count || page_column >= row_bytes) {
-        return -1;
-    }
-    return static_cast<long>(page_y) * pages_x * row_bytes * row_count + static_cast<long>(row_bytes) * page_x +
-           static_cast<long>(page_row) * row_bytes * pages_x + page_column;
+// The largest width or height a TIM2 header holds; past it a level's sizes are refused, and up to
+// it they and every offset fit 64 bits.
+inline constexpr std::uint64_t kMaxDimension = 0xFFFF;
+
+inline bool DimensionsFit(std::int64_t width, std::int64_t height) {
+    return width > 0 && height > 0 && static_cast<std::uint64_t>(width) <= kMaxDimension &&
+           static_cast<std::uint64_t>(height) <= kMaxDimension;
 }
 
-// The bytes an 8-bit level in the page swizzle's order spans: one past the furthest texel's.
-inline std::uint64_t SwizzledBytes(int width, int height) {
-    if (width <= 0 || height <= 0) {
+// Where an 8-bit-to-PSMCT32 page swizzle puts texel (x, y) of a width x height image, or none
+// where its page-sized work buffers drop it (images narrower than a block).
+inline std::optional<std::uint64_t> SwizzledOffset(std::uint64_t width, std::uint64_t height, std::uint64_t x,
+                                                   std::uint64_t y) {
+    std::uint64_t pages_x = ((width - 1) >> 7) + 1;
+    std::uint64_t page_width = pages_x == 1 ? width : 128;
+    std::uint64_t row_bytes = pages_x == 1 ? width * 2 : 256;
+    std::uint64_t row_count = ((height - 1) >> 6) == 0 ? height >> 1 : 32;
+    std::uint64_t page_x = x / page_width;
+    std::uint64_t page_y = y >> 6;
+    std::uint64_t local_x = x - page_x * page_width;
+    std::uint64_t local_y = y & 63;
+    std::uint64_t source = (local_y & 15) * 16 + (local_x & 15);
+    std::uint64_t column = source >> 6;
+    std::uint64_t output = column * 64 + detail::kInverseLut.to_output[column & 1][source & 63];
+    std::uint64_t page_row = (local_y >> 4) * 8 + (output >> 5);
+    std::uint64_t page_column = (local_x >> 4) * 32 + (output & 31);
+    if (page_row >= row_count || page_column >= row_bytes) {
+        return std::nullopt;
+    }
+    return page_y * pages_x * row_bytes * row_count + row_bytes * page_x + page_row * row_bytes * pages_x +
+           page_column;
+}
+
+// The bytes an 8-bit level in the page swizzle's order spans: one past the furthest texel's, or 0
+// for dimensions a TIM2 header cannot hold.
+inline std::uint64_t SwizzledBytes(std::int64_t width, std::int64_t height) {
+    if (!DimensionsFit(width, height)) {
         return 0;
     }
     // Each row of pages lies above the last, so the furthest texel is in the bottom one.
-    long furthest = -1;
-    for (int y = (height - 1) & ~63; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            furthest = std::max(furthest, SwizzledOffset(width, height, x, y));
+    std::uint64_t end = 0;
+    for (std::int64_t y = (height - 1) & ~std::int64_t{63}; y < height; y++) {
+        for (std::int64_t x = 0; x < width; x++) {
+            if (std::optional<std::uint64_t> offset = SwizzledOffset(width, height, x, y)) {
+                end = std::max(end, *offset + 1);
+            }
         }
     }
-    return static_cast<std::uint64_t>(furthest + 1);
+    return end;
 }
 
-// False, leaving linear untouched, when either span is short of the level.
-inline bool Unswizzle8(int width, int height, std::span<const unsigned char> swizzled,
+// False, leaving linear untouched, when either span is short of the level or the dimensions are
+// past a TIM2 header's.
+inline bool Unswizzle8(std::int64_t width, std::int64_t height, std::span<const unsigned char> swizzled,
                        std::span<unsigned char> linear) {
-    if (width <= 0 || height <= 0 || swizzled.size() < SwizzledBytes(width, height) ||
-        linear.size() < static_cast<std::uint64_t>(width) * height) {
+    if (!DimensionsFit(width, height) || swizzled.size() < SwizzledBytes(width, height) ||
+        linear.size() < static_cast<std::uint64_t>(width) * static_cast<std::uint64_t>(height)) {
         return false;
     }
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            long offset = SwizzledOffset(width, height, x, y);
-            linear[static_cast<std::size_t>(y) * width + x] = offset < 0 ? 0 : swizzled[offset];
+    for (std::int64_t y = 0; y < height; y++) {
+        for (std::int64_t x = 0; x < width; x++) {
+            std::optional<std::uint64_t> offset = SwizzledOffset(width, height, x, y);
+            linear[static_cast<std::size_t>(y * width + x)] = offset ? swizzled[static_cast<std::size_t>(*offset)] : 0;
         }
     }
     return true;
@@ -261,8 +272,10 @@ inline bool Unswizzle8(int width, int height, std::span<const unsigned char> swi
 
 // The bytes DecodeLevel reads for a level: only 8-bit pixels come swizzled.
 inline std::uint64_t SourceBytes(Format format, unsigned width, unsigned height, bool swizzled) {
-    return swizzled && format == Format::Index8 ? SwizzledBytes(static_cast<int>(width), static_cast<int>(height))
-                                                : LevelBytes(format, width, height);
+    if (!DimensionsFit(width, height)) {
+        return 0;
+    }
+    return swizzled && format == Format::Index8 ? SwizzledBytes(width, height) : LevelBytes(format, width, height);
 }
 
 // One level as linear texels: an index byte per texel for the index formats, r,g,b,a bytes
@@ -272,8 +285,7 @@ inline bool DecodeLevel(Format format, unsigned width, unsigned height, std::spa
                         bool swizzled, std::vector<std::uint8_t> &out) {
     out.clear();
     std::size_t texels = static_cast<std::size_t>(width) * height;
-    if (width == 0 || height == 0 || width > 0xFFFF || height > 0xFFFF ||
-        src.size() < SourceBytes(format, width, height, swizzled)) {
+    if (!DimensionsFit(width, height) || src.size() < SourceBytes(format, width, height, swizzled)) {
         return false;
     }
     switch (format) {
@@ -287,7 +299,7 @@ inline bool DecodeLevel(Format format, unsigned width, unsigned height, std::spa
         case Format::Index8:
             out.resize(texels);
             if (swizzled) {
-                Unswizzle8(static_cast<int>(width), static_cast<int>(height), src, out);
+                Unswizzle8(width, height, src, out);
             } else {
                 std::memcpy(out.data(), src.data(), texels);
             }

@@ -94,10 +94,10 @@ TEST(TexTim2, UnswizzleIsAPermutationOfAPage) {
     std::vector<int>           hits(swizzled.size(), 0);
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
-            long offset = tim2::SwizzledOffset(width, height, x, y);
-            ASSERT_GE(offset, 0);
-            hits[static_cast<std::size_t>(offset)]++;
-            swizzled[static_cast<std::size_t>(offset)] = static_cast<unsigned char>(x ^ y);
+            auto offset = tim2::SwizzledOffset(width, height, x, y);
+            ASSERT_TRUE(offset.has_value());
+            hits[*offset]++;
+            swizzled[*offset] = static_cast<unsigned char>(x ^ y);
         }
     }
     for (int hit : hits) {
@@ -175,13 +175,15 @@ TEST(TexTim2, ParseFindsEachMipmapLevel) {
 TEST(TexTim2, SwizzledBytesReachesTheFurthestTexel) {
     for (int width : {1, 2, 15, 16, 17, 64, 100, 128, 129, 200, 256, 300}) {
         for (int height : {1, 2, 3, 16, 31, 32, 63, 64, 65, 100, 128, 129, 192}) {
-            long furthest = -1;
+            std::uint64_t end = 0;
             for (int y = 0; y < height; y++) {
                 for (int x = 0; x < width; x++) {
-                    furthest = std::max(furthest, tim2::SwizzledOffset(width, height, x, y));
+                    if (auto offset = tim2::SwizzledOffset(width, height, x, y)) {
+                        end = std::max(end, *offset + 1);
+                    }
                 }
             }
-            EXPECT_EQ(tim2::SwizzledBytes(width, height), static_cast<std::uint64_t>(furthest + 1))
+            EXPECT_EQ(tim2::SwizzledBytes(width, height), end)
                 << width << "x" << height;
         }
     }
@@ -241,4 +243,25 @@ TEST(TexTim2, MalformedHeadersNeverReachPastTheFile) {
             tim2::Colours256(file, picture);
         }
     }
+}
+
+// TIM2 dimensions are 16-bit; past that a level's byte count and offsets are refused, and up to it
+// they are 64-bit, so a 65535-square level's offsets pass 2^31 on every system.
+TEST(TexTim2, HugeDimensionsAreBoundedOrRefused) {
+    EXPECT_EQ(tim2::SwizzledBytes(1 << 20, 1 << 20), 0u);
+    EXPECT_EQ(tim2::SwizzledBytes(0x10000, 64), 0u);
+    std::vector<unsigned char> tiny(16);
+    std::vector<unsigned char> linear(16);
+    EXPECT_FALSE(tim2::Unswizzle8(0x10000, 1, tiny, linear));
+    EXPECT_FALSE(tim2::Unswizzle8(1, 0x7FFFFFFF, tiny, linear));
+
+    std::uint64_t furthest = tim2::SwizzledBytes(0xFFFF, 0xFFFF);
+    EXPECT_GT(furthest, 0x7FFFFFFFu);
+    EXPECT_LE(furthest, std::uint64_t{1} << 32);
+    auto corner = tim2::SwizzledOffset(0xFFFF, 0xFFFF, 0, 0xFFC0);
+    ASSERT_TRUE(corner.has_value());
+    EXPECT_EQ(*corner, std::uint64_t{1023} * 512 * 256 * 32);
+
+    auto pictures = tim2::Parse(Tim2File(0xFFFF, 0xFFFF, 5, 16, 1024, 256));
+    EXPECT_FALSE(pictures.has_value());
 }
