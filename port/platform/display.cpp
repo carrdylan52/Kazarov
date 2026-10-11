@@ -16,18 +16,18 @@ WindowMode g_shown;
 // A fullscreen change SDL took and the window has not been seen to make: true to enter.
 std::optional<bool> g_outstanding;
 // The fields of the latest change of them, and the mode they ask of the window.
-Config              g_intent;
+ConfigBase          g_intent;
 WindowMode          g_intent_mode;
 std::optional<bool> g_pump_save;
 
-void CopyFields(Config &config, const Config &from) {
+void CopyFields(ConfigBase &config, const ConfigBase &from) {
     config.window_width = from.window_width;
     config.window_height = from.window_height;
     config.fullscreen = from.fullscreen;
 }
 
 // Fullscreen keeps the size asked for, which is the window's for later.
-void Describe(Config &config, const WindowMode &mode) {
+void Describe(ConfigBase &config, const WindowMode &mode) {
     config.fullscreen = mode.fullscreen;
     if (!mode.fullscreen) {
         config.window_width = mode.width;
@@ -36,14 +36,14 @@ void Describe(Config &config, const WindowMode &mode) {
 }
 
 // Makes the fields what the window already is, without asking anything of it.
-bool Reconcile(const Config &config) {
+bool Reconcile(const ConfigBase &config) {
     struct Scope {
         Scope() { g_reconciling = true; }
 
         ~Scope() { g_reconciling = false; }
     } scope;
 
-    return ConfigChange(config);
+    return ConfigBaseChangeHost(config);
 }
 
 } // namespace
@@ -62,7 +62,7 @@ void DisplaySetOverrides(int width, int height, bool headless) {
     g_override_headless = headless;
 }
 
-WindowConfig DisplayWindowConfig(const Config &config) {
+WindowConfig DisplayWindowConfig(const ConfigBase &config) {
     WindowConfig window;
     window.width = g_override_width > 0 ? g_override_width : config.window_width;
     window.height = g_override_height > 0 ? g_override_height : config.window_height;
@@ -71,7 +71,7 @@ WindowConfig DisplayWindowConfig(const Config &config) {
     return window;
 }
 
-void DisplayChanged(const Config &before, const Config &after) {
+void DisplayChanged(const ConfigBase &before, const ConfigBase &after) {
     if (g_reconciling || (after.window_width == before.window_width && after.window_height == before.window_height &&
                           after.fullscreen == before.fullscreen)) {
         return;
@@ -79,10 +79,10 @@ void DisplayChanged(const Config &before, const Config &after) {
     g_report = g_ops.set_mode(DisplayWindowConfig(after));
 }
 
-bool DisplayApply(const Config &config) {
-    Config before = ConfigGet();
+bool DisplayApply(const ConfigBase &config) {
+    ConfigBase before = ConfigBaseGet();
     g_report.reset();
-    bool                            saved = ConfigChange(config);
+    bool                            saved = ConfigBaseChange(config);
     std::optional<WindowModeResult> report = std::exchange(g_report, std::nullopt);
     if (!report) {
         return saved;
@@ -95,14 +95,14 @@ bool DisplayApply(const Config &config) {
     if (g_outstanding == report->observed.fullscreen) {
         g_outstanding.reset();
     }
-    g_intent = ConfigGet();
+    g_intent = ConfigBaseGet();
     g_intent_mode = report->requested;
     g_shown = report->observed;
     if (report->Applied()) {
         g_warning = DisplayWarning::None;
         return saved;
     }
-    Config fields = ConfigGet();
+    ConfigBase fields = ConfigBaseGet();
     if (report->observed == report->before) {
         g_warning = DisplayWarning::Kept;
         CopyFields(fields, before);
@@ -126,7 +126,7 @@ void DisplayPump() {
         return;
     }
     g_shown = observed;
-    Config fields = ConfigGet();
+    ConfigBase fields = ConfigBaseGet();
     CopyFields(fields, g_intent);
     if (observed == g_intent_mode) {
         g_warning = DisplayWarning::None;

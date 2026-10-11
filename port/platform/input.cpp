@@ -15,7 +15,7 @@
 #include <vector>
 
 #include "clock.hpp"
-#include "config.hpp"
+#include "config_base.hpp"
 #include "gamepad_map.hpp"
 #include "mouse.hpp"
 #include "touchpad.hpp"
@@ -672,12 +672,12 @@ void InputInit() {
     } else {
         std::fprintf(stderr, "input: no gamepads: %s\n", SDL_GetError());
     }
-    InputApplyConfig(ConfigGet());
+    InputApplyConfig(ConfigBaseGet());
     WindowAddEventHook(InputHandleEvent);
     MouseStart();
 }
 
-void InputApplyConfig(const Config &config) {
+void InputApplyConfig(const ConfigBase &config) {
     InputResetBindings();
     for (const ConfigKeyBinding &binding : config.key_bindings) {
         std::vector<std::string_view> names(binding.keys.begin(), binding.keys.end());

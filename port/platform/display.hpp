@@ -2,7 +2,7 @@
 
 #include <optional>
 
-#include "config.hpp"
+#include "config_base.hpp"
 #include "window.hpp"
 
 // Keeps video.width, video.height and video.fullscreen true to the window. SDL may refuse a change
@@ -36,17 +36,17 @@ void DisplayUseWindow(const DisplayWindow &window);
 void DisplaySetOverrides(int width, int height, bool headless);
 
 // The window the settings ask for, the overrides applied.
-WindowConfig DisplayWindowConfig(const Config &config);
+WindowConfig DisplayWindowConfig(const ConfigBase &config);
 
-// The change hook that gives the window a changed size or mode. A reconciling ConfigChange asks
+// The change hook that gives the window a changed size or mode. A reconciling change asks
 // nothing of the window, whatever the overrides make of its fields.
-void DisplayChanged(const Config &before, const Config &after);
+void DisplayChanged(const ConfigBase &before, const ConfigBase &after);
 
-// ConfigChange(config), then the display fields made the window's mode where the window did not
+// ConfigBaseChange(config), then the display fields made the window's mode where the window did not
 // take the one asked for. Returns whether the settings are saved.
-bool DisplayApply(const Config &config);
+bool DisplayApply(const ConfigBase &config);
 
-// For the host after it pumps the window's events, outside any ConfigChange: while a warning
+// For the host after it pumps the window's events, outside any change of settings: while a warning
 // stands or a fullscreen change is unfinished, a change of the window's mode, as SDL finishing late
 // makes, becomes the display fields, from the latest ones asked for, and the warning goes if it is
 // the mode they ask.

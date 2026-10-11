@@ -15,7 +15,7 @@
 #define STBI_NO_STDIO
 #include "stb_image.h"
 
-#include "platform/config.hpp"
+#include "platform/config_base.hpp"
 #include "platform/input.hpp"
 #include "platform/paths.hpp"
 
@@ -198,7 +198,7 @@ const char *GlyphName(Button button) {
     }
 }
 
-const char *StyleName(const Config &config) {
+const char *StyleName(const ConfigBase &config) {
     if (config.glyph_device == ConfigGlyphDevice::Ps5Color) {
         return "ps5color";
     }
@@ -240,7 +240,7 @@ bool FindNamed(const char *style_name, const char *name, Image &out) {
 }
 
 bool Find(Button button, Image &out) {
-    const Config &config = ConfigGet();
+    const ConfigBase &config = ConfigBaseGet();
     if (!config.glyphs_new) {
         return false;
     }
