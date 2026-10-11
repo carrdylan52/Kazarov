@@ -32,26 +32,64 @@ function(kz_port_shaders out_var)
     set(${out_var} ${headers} PARENT_SCOPE)
 endfunction()
 
+# kz_port_third_party(<out_var> [SEARCH <dir>...])
+#
+# The single-file libraries the port library compiles in, at pinned commits: each is taken from the
+# first SEARCH directory that has it (a Flatpak build has no network and lists them as sources), or
+# downloaded into the build tree. <out_var> receives the directories to put on the include path.
+function(kz_port_third_party out_var)
+    cmake_parse_arguments(PARSE_ARGV 1 arg "" "" "SEARCH")
+    set(dr_libs https://raw.githubusercontent.com/mackron/dr_libs/dfe8377631000664666519fdb83da193fd8037f4)
+    set(stb https://raw.githubusercontent.com/nothings/stb/2c980bb59875b0d32144a71867fbdebb2f77cd20)
+    set(files
+        dr_wav.h ${dr_libs}/dr_wav.h 03e70c1a2d9787cd7ed3e966c075bea7bac6373f759db9cd7ca9ccdfc4ec4493
+        dr_flac.h ${dr_libs}/dr_flac.h 111144e778f55738db6851cb226015c419e00d04b916a09506d4856d9cff945c
+        stb_vorbis.c ${stb}/stb_vorbis.c 4c7cb2ff1f7011e9d67950446b7eb9ca044f2e464d76bfbb0b84dd2e23e65636
+        stb_truetype.h ${stb}/stb_truetype.h ecd30b05e0dd4fea3a13c26810dd9e1992dc379049482c393d5a19e6b5090aab
+        stb_image.h ${stb}/stb_image.h 594c2fe35d49488b4382dbfaec8f98366defca819d916ac95becf3e75f4200b3)
+    set(fetched ${CMAKE_BINARY_DIR}/third_party)
+    set(dirs "")
+    while(files)
+        list(POP_FRONT files name url hash)
+        set(found "")
+        foreach(dir IN LISTS arg_SEARCH)
+            if(EXISTS ${dir}/${name})
+                set(found ${dir})
+                break()
+            endif()
+        endforeach()
+        if(NOT found)
+            set(found ${fetched})
+            if(NOT EXISTS ${fetched}/${name})
+                file(DOWNLOAD ${url} ${fetched}/${name} EXPECTED_HASH SHA256=${hash})
+            endif()
+        endif()
+        list(APPEND dirs ${found})
+    endwhile()
+    list(REMOVE_DUPLICATES dirs)
+    set(${out_var} ${dirs} PARENT_SCOPE)
+endfunction()
+
 # kz_port_library(<target> APP_NAME <name> APP_ID <id> ENV_PREFIX <prefix> MIN_VULKAN <1.3|1.4> ICON <file>
 #                 [APP_IDENTIFIER <reverse-dns>] [PROJECT_LABEL <text>] [PROJECT_URL <url>]
 #                 [DISCORD_CLIENT_ID <id>] [DISCORD_IMAGE <asset>] [DISCORD_IMAGE_TEXT <text>]
-#                 [SHADER_DIRS <dir>...] [DEFINES <define>...])
+#                 [SHADER_DIRS <dir>...] [THIRD_PARTY_DIRS <dir>...] [DEFINES <define>...])
 #
-# An OBJECT library of the shared host code (port/gfx, port/platform), compiled without any game
-# header. APP_NAME is the name the game shows, APP_ID its lower-case identifier (the directory of an
-# installed copy's data and saves), ENV_PREFIX what its environment variables start with, underscore
-# included, MIN_VULKAN the oldest Vulkan version the game accepts in the loader and the device, ICON
-# the window icon as raw square RGBA pixels. APP_IDENTIFIER names the game to the desktop (APP_ID if
-# not given). PROJECT_LABEL and PROJECT_URL are the Discord presence's button, DISCORD_* its
-# application and small image; without DISCORD_CLIENT_ID there is no presence. They reach the code
-# as generated/app/app_info.hpp and generated/app/icon.hpp. SHADER_DIRS adds the game's own shaders
-# to the renderer's.
-#
-# The caller adds stb_truetype.h and stb_image.h to the target's include path.
+# An OBJECT library of the shared host code (port/gfx, port/platform, port/audio), compiled without
+# any game header. APP_NAME is the name the game shows, APP_ID its lower-case identifier (the
+# directory of an installed copy's data and saves), ENV_PREFIX what its environment variables start
+# with, underscore included, MIN_VULKAN the oldest Vulkan version the game accepts in the loader and
+# the device, ICON the window icon as raw square RGBA pixels. APP_IDENTIFIER names the game to the
+# desktop (APP_ID if not given). PROJECT_LABEL and PROJECT_URL are the Discord presence's button,
+# DISCORD_* its application and small image; without DISCORD_CLIENT_ID there is no presence. They
+# reach the code as generated/app/app_info.hpp and generated/app/icon.hpp. SHADER_DIRS adds the
+# game's own shaders to the renderer's. THIRD_PARTY_DIRS are where kz_port_third_party looks before
+# it downloads.
 function(kz_port_library target)
     set(strings APP_NAME APP_ID APP_IDENTIFIER ENV_PREFIX PROJECT_LABEL PROJECT_URL DISCORD_CLIENT_ID
         DISCORD_IMAGE DISCORD_IMAGE_TEXT)
-    cmake_parse_arguments(PARSE_ARGV 1 arg "" "${strings};MIN_VULKAN;ICON" "SHADER_DIRS;DEFINES")
+    cmake_parse_arguments(PARSE_ARGV 1 arg "" "${strings};MIN_VULKAN;ICON"
+        "SHADER_DIRS;THIRD_PARTY_DIRS;DEFINES")
     foreach(required APP_NAME APP_ID ENV_PREFIX MIN_VULKAN ICON)
         if(NOT DEFINED arg_${required})
             message(FATAL_ERROR "kz_port_library(${target}) needs ${required}")
@@ -110,10 +148,13 @@ inline constexpr const char *kDiscordImageText = ${DISCORD_IMAGE_TEXT_LITERAL};
         CONTENT "#pragma once\n\n#include <cstdint>\n\nnamespace app {\ninline constexpr int kIconSize = ${icon_size};\ninline constexpr std::uint8_t kIconRgba[] = {${icon_data}};\n} // namespace app\n")
 
     kz_port_shaders(shader_headers DIRS ${KZ_ROOT}/port/gfx/shaders ${arg_SHADER_DIRS})
-    file(GLOB_RECURSE sources CONFIGURE_DEPENDS ${KZ_ROOT}/port/gfx/*.cpp ${KZ_ROOT}/port/platform/*.cpp)
+    file(GLOB_RECURSE sources CONFIGURE_DEPENDS ${KZ_ROOT}/port/gfx/*.cpp ${KZ_ROOT}/port/platform/*.cpp
+        ${KZ_ROOT}/port/audio/*.cpp)
+    kz_port_third_party(third_party_dirs SEARCH ${arg_THIRD_PARTY_DIRS})
 
     add_library(${target} OBJECT ${sources} ${shader_headers})
     target_include_directories(${target} PUBLIC ${KZ_ROOT}/port ${generated})
+    target_include_directories(${target} SYSTEM PRIVATE ${third_party_dirs})
     target_link_libraries(${target} PUBLIC SDL3::SDL3 Vulkan::Vulkan nlohmann_json::nlohmann_json)
     target_compile_definitions(${target} PUBLIC ${arg_DEFINES})
     target_compile_options(${target} PRIVATE -Wall -ffunction-sections -fdata-sections)
