@@ -1,11 +1,20 @@
 #include "host0.hpp"
 
 #include <fcntl.h>
+#ifdef _WIN32
+#include <io.h>
+#include <share.h>
+#include <sys/stat.h>
+#else
 #include <unistd.h>
+#endif
 
 #include <algorithm>
 #include <cerrno>
+#include <climits>
+#include <cstdint>
 #include <filesystem>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -20,6 +29,40 @@ namespace {
 
 constexpr int kAccessMask = 0x0003;
 
+// The CRT's descriptor calls under one name on each system, with a 64-bit offset.
+namespace native {
+#ifdef _WIN32
+constexpr int kReadOnly = _O_RDONLY, kWriteOnly = _O_WRONLY, kReadWrite = _O_RDWR, kAppend = _O_APPEND,
+              kCreate = _O_CREAT, kTruncate = _O_TRUNC, kExclusive = _O_EXCL;
+// CRT text mode translates CR/LF and treats Ctrl-Z as EOF, corrupting binary game files.
+constexpr int kAlways = _O_BINARY | _O_NOINHERIT;
+
+int Open(const fs::path &path, int flags) {
+    int fd = -1;
+    _wsopen_s(&fd, path.c_str(), flags, _SH_DENYNO, _S_IREAD | _S_IWRITE);
+    return fd;
+}
+
+int          Close(int fd) { return _close(fd); }
+std::int64_t Seek(int fd, std::int64_t offset, int whence) { return _lseeki64(fd, offset, whence); }
+std::int64_t Read(int fd, void *buffer, unsigned size) { return _read(fd, buffer, size); }
+std::int64_t Write(int fd, const void *buffer, unsigned size) { return _write(fd, buffer, size); }
+#else
+constexpr int kReadOnly = O_RDONLY, kWriteOnly = O_WRONLY, kReadWrite = O_RDWR, kAppend = O_APPEND,
+              kCreate = O_CREAT, kTruncate = O_TRUNC, kExclusive = O_EXCL;
+constexpr int kAlways = O_CLOEXEC;
+
+int          Open(const fs::path &path, int flags) { return ::open(path.c_str(), flags, 0644); }
+int          Close(int fd) { return ::close(fd); }
+std::int64_t Seek(int fd, std::int64_t offset, int whence) { return ::lseek(fd, static_cast<off_t>(offset), whence); }
+std::int64_t Read(int fd, void *buffer, unsigned size) { return ::read(fd, buffer, size); }
+std::int64_t Write(int fd, const void *buffer, unsigned size) { return ::write(fd, buffer, size); }
+#endif
+} // namespace native
+
+// Held across each call, so no thread uses a descriptor another is closing (whose number the
+// system may already have given a new file).
+std::mutex              g_mutex;
 std::unordered_set<int> g_open;
 
 bool HostPath(const char *name, fs::path &out) {
@@ -45,33 +88,28 @@ int HostFlags(int flags) {
     int host;
     switch (flags & kAccessMask) {
         case kWriteOnly:
-            host = O_WRONLY;
+            host = native::kWriteOnly;
             break;
         case kReadWrite:
-            host = O_RDWR;
+            host = native::kReadWrite;
             break;
         default:
-            host = O_RDONLY;
+            host = native::kReadOnly;
             break;
     }
     if (flags & kAppend) {
-        host |= O_APPEND;
+        host |= native::kAppend;
     }
     if (flags & kCreate) {
-        host |= O_CREAT;
+        host |= native::kCreate;
     }
     if (flags & kTruncate) {
-        host |= O_TRUNC;
+        host |= native::kTruncate;
     }
     if (flags & kExclusive) {
-        host |= O_EXCL;
+        host |= native::kExclusive;
     }
-#ifdef _WIN32
-    // CRT text mode translates CR/LF and treats Ctrl-Z as EOF, corrupting binary game files.
-    return host | O_BINARY | O_NOINHERIT;
-#else
-    return host | O_CLOEXEC;
-#endif
+    return host | native::kAlways;
 }
 
 bool Known(int fd) {
@@ -89,11 +127,8 @@ int Open(const char *name, int flags) {
         std::error_code error;
         fs::create_directories(path.parent_path(), error);
     }
-#ifdef _WIN32
-    int fd = ::_wopen(path.c_str(), HostFlags(flags), 0644);
-#else
-    int fd = ::open(path.c_str(), HostFlags(flags), 0644);
-#endif
+    std::lock_guard lock(g_mutex);
+    int             fd = native::Open(path, HostFlags(flags));
     if (fd < 0) {
         return -errno;
     }
@@ -102,34 +137,44 @@ int Open(const char *name, int flags) {
 }
 
 int Close(int fd) {
+    std::lock_guard lock(g_mutex);
     if (!Known(fd)) {
         return -EBADF;
     }
     g_open.erase(fd);
-    return ::close(fd) < 0 ? -errno : 0;
+    return native::Close(fd) < 0 ? -errno : 0;
 }
 
 int Lseek(int fd, int offset, int whence) {
+    std::lock_guard lock(g_mutex);
     if (!Known(fd)) {
         return -EBADF;
     }
-    off_t result = ::lseek(fd, offset, whence);
+    std::int64_t before = native::Seek(fd, 0, SEEK_CUR);
+    std::int64_t result = native::Seek(fd, offset, whence);
+    if (result > INT_MAX) {
+        // The game's offsets are ints: as lseek with off_t, refuse and keep the position.
+        native::Seek(fd, before, SEEK_SET);
+        return -EOVERFLOW;
+    }
     return result < 0 ? -errno : static_cast<int>(result);
 }
 
 int Read(int fd, void *buffer, int size) {
+    std::lock_guard lock(g_mutex);
     if (!Known(fd)) {
         return -EBADF;
     }
-    ssize_t result = ::read(fd, buffer, static_cast<std::size_t>(std::max(size, 0)));
+    std::int64_t result = native::Read(fd, buffer, static_cast<unsigned>(std::max(size, 0)));
     return result < 0 ? -errno : static_cast<int>(result);
 }
 
 int Write(int fd, const void *buffer, int size) {
+    std::lock_guard lock(g_mutex);
     if (!Known(fd)) {
         return -EBADF;
     }
-    ssize_t result = ::write(fd, buffer, static_cast<std::size_t>(std::max(size, 0)));
+    std::int64_t result = native::Write(fd, buffer, static_cast<unsigned>(std::max(size, 0)));
     return result < 0 ? -errno : static_cast<int>(result);
 }
 
