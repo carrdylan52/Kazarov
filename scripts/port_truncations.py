@@ -588,7 +588,9 @@ def unit_entries(build):
         path = os.path.realpath(os.path.join(entry["directory"], entry["file"]))
         if path.startswith(copies):
             args = shlex.split(entry.pop("command")) if "command" in entry else entry["arguments"]
-            entry["arguments"] = [a for a in args if os.path.realpath(os.path.join(entry["directory"], a)) != path]
+            # The bodies the copy drops come back, the MW runtime's exception handling among them.
+            entry["arguments"] = ["-fexceptions" if a == "-fno-exceptions" else a for a in args
+                                  if os.path.realpath(os.path.join(entry["directory"], a)) != path]
             entry["file"] = os.path.join(ROOT, "ps2", "src", path[len(copies):])
     return [e for e in entries if rel(e["file"]).startswith(("ps2/src/", "port/src/")) and
             "/tests/" not in e["file"]]
@@ -629,6 +631,11 @@ def work(job):
     load_libclang(libclang)
     os.chdir(entry["directory"])
     return walk(entry["file"], command_args(entry))
+
+
+def run_units(entries, libclang, settings, jobs):
+    with multiprocessing.Pool(jobs) as pool:
+        return pool.map(work, [(e, libclang, settings) for e in entries], chunksize=1)
 
 
 def linked_symbols(build):
@@ -907,8 +914,23 @@ def main():
     entries = unit_entries(options.build)
     if options.only:
         entries = [e for e in entries if re.search(options.only, e["file"])]
-    with multiprocessing.Pool(options.jobs) as pool:
-        results = pool.map(work, [(e, options.libclang, settings) for e in entries], chunksize=1)
+    results = run_units(entries, options.libclang, settings, options.jobs)
+
+    # A unit that did not load or parse hides its casts, so neither a report nor a check from the
+    # rest stands.
+    failed = 0
+    for result in results:
+        if "error" in result:
+            print("port_truncations.py: %s: %s" % (result["file"], result["error"]), file=sys.stderr)
+            failed += 1
+            continue
+        for error in result["errors"]:
+            print("port_truncations.py: %s: %s" % (result["file"], error), file=sys.stderr)
+        failed += bool(result["errors"])
+    if failed:
+        print("port_truncations.py: %d of %d units did not load or parse; nothing checked or written" % (
+            failed, len(results)), file=sys.stderr)
+        return 1
 
     sinks = set()
     edges = []
@@ -916,11 +938,6 @@ def main():
     seen = {}
     backs = {}
     for result in results:
-        if "error" in result:
-            print("port_truncations.py: %s: %s" % (result["file"], result["error"]), file=sys.stderr)
-            continue
-        for error in result["errors"]:
-            print("port_truncations.py: %s: %s" % (result["file"], error), file=sys.stderr)
         sinks.update(result["sinks"])
         edges.extend(result["edges"])
         port_definitions.update(result["definitions"])

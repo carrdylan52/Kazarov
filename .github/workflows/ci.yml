@@ -39,6 +39,7 @@ jobs:
           tests/test_kz_split_stamp.py
           tests/test_kz_cached.py
           tests/test_kazarov_elf.py
+          tests/test_port_truncations.py
           tests/cmake
 
   image:
