@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
@@ -8,12 +9,23 @@
 #include <fstream>
 #include <functional>
 #include <map>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <unordered_set>
 #include <vector>
+
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#include <share.h>
+#include <sys/stat.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 #include "iso9660.hpp"
 #include "path.hpp"
@@ -80,21 +92,85 @@ inline fs::path TemporaryBeside(const fs::path &path) {
     return path.parent_path() / ("." + path.filename().string() + ".kztmp");
 }
 
+// A new file, never an existing one or what a link at its path points to: a link planted at the
+// predictable temporary name would otherwise be written through.
+class NewFile {
+public:
+    explicit NewFile(const fs::path &path) : path_(path) {
+        for (int attempt = 0; attempt < 2 && fd_ < 0; attempt++) {
+#ifdef _WIN32
+            // _O_CREAT | _O_EXCL is CreateFile's CREATE_NEW, which fails on any existing name,
+            // a link included, rather than following it.
+            _wsopen_s(&fd_, path.c_str(), _O_WRONLY | _O_CREAT | _O_EXCL | _O_BINARY | _O_NOINHERIT, _SH_DENYRW,
+                      _S_IREAD | _S_IWRITE);
+#else
+            fd_ = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644);
+#endif
+            if (fd_ < 0 && errno == EEXIST && attempt == 0) {
+                // An interrupted run's leftover; removing a link removes the link, not its target.
+                std::error_code ignored;
+                fs::remove(path, ignored);
+            }
+        }
+        if (fd_ < 0) {
+            Fail("cannot create {}", path.string());
+        }
+    }
+
+    NewFile(const NewFile &) = delete;
+    NewFile &operator=(const NewFile &) = delete;
+
+    ~NewFile() {
+        if (fd_ >= 0) {
+            CloseFd();
+            std::error_code ignored;
+            fs::remove(path_, ignored);
+        }
+    }
+
+    void Write(std::span<const unsigned char> data) {
+        while (!data.empty()) {
+            unsigned step = static_cast<unsigned>(std::min<std::size_t>(data.size(), 1u << 30));
+#ifdef _WIN32
+            int written = _write(fd_, data.data(), step);
+#else
+            ssize_t written = ::write(fd_, data.data(), step);
+#endif
+            if (written <= 0) {
+                Fail("write error on {}", path_.string());
+            }
+            data = data.subspan(static_cast<std::size_t>(written));
+        }
+    }
+
+    // Closes the file and renames it over target; until then the destructor removes it.
+    void Replace(const fs::path &target) {
+        if (CloseFd() != 0) {
+            Fail("write error on {}", path_.string());
+        }
+        fs::rename(path_, target);
+    }
+
+private:
+    int CloseFd() {
+        int fd = std::exchange(fd_, -1);
+#ifdef _WIN32
+        return _close(fd);
+#else
+        return ::close(fd);
+#endif
+    }
+
+    fs::path path_;
+    int      fd_ = -1;
+};
+
 // Readers never see a half-written file: an interrupted write leaves the old one in place.
 inline void WriteFile(const fs::path &path, std::span<const unsigned char> data) {
     fs::create_directories(path.parent_path());
-    fs::path temporary = TemporaryBeside(path);
-    {
-        std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
-        file.write(reinterpret_cast<const char *>(data.data()), static_cast<std::streamsize>(data.size()));
-        file.close();
-        if (!file) {
-            std::error_code ignored;
-            fs::remove(temporary, ignored);
-            Fail("cannot write {}", path.string());
-        }
-    }
-    fs::rename(temporary, path);
+    NewFile file(TemporaryBeside(path));
+    file.Write(data);
+    file.Replace(path);
 }
 
 inline std::string SourceIdentity(const fs::path &file) {
@@ -163,6 +239,28 @@ inline void WriteManifest(const fs::path &root, const Manifest &manifest) {
               std::span(reinterpret_cast<const unsigned char *>(text.data()), text.size()));
 }
 
+// The first link (or junction, or anything else neither a file nor a directory) below `out` on the
+// way to `path`, or at it: it would take a write or a read outside `out`. `out` itself may be one.
+inline std::optional<fs::path> LinkOnTheWay(const fs::path &out, std::string_view path) {
+    fs::path at = out;
+    for (const fs::path &component : fs::path(path)) {
+        at /= component;
+        std::error_code error;
+        fs::file_status status = fs::symlink_status(at, error);
+        if (fs::is_symlink(status) ||
+            (fs::exists(status) && !fs::is_regular_file(status) && !fs::is_directory(status))) {
+            return at;
+        }
+    }
+    return std::nullopt;
+}
+
+inline void RefuseLinks(const fs::path &out, std::string_view path) {
+    if (std::optional<fs::path> link = LinkOnTheWay(out, path)) {
+        Fail("{} is a link", link->string());
+    }
+}
+
 // Everything that would make the output ambiguous or escape `out` is refused before a byte is
 // written: unsafe paths, two entries for one path, a file where another needs a directory, and
 // extents past the end of their source.
@@ -184,6 +282,7 @@ inline void CheckEntries(std::span<const Entry> entries, const fs::path &out, co
         }
     }
     for (const Entry &entry : entries) {
+        RefuseLinks(out, entry.path);
         for (std::size_t slash = entry.path.find('/'); slash != std::string::npos;
              slash = entry.path.find('/', slash + 1)) {
             std::string directory = entry.path.substr(0, slash);
@@ -246,39 +345,24 @@ inline Result ExtractEntries(std::span<const Entry> entries, const fs::path &out
                 continue;
             }
         }
+        // A directory made a link since CheckEntries looked would take the write elsewhere.
+        RefuseLinks(out, entry.path);
         fs::create_directories(target.parent_path());
-        fs::path temporary = TemporaryBeside(target);
-        Sha256   hash;
-        {
-            std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
-            if (!file) {
-                Fail("cannot create {}", temporary.string());
-            }
-            Reader        reader(entry.extent.file);
-            std::uint64_t offset = entry.extent.offset;
-            try {
-                for (std::uint64_t left = entry.extent.size; left != 0;) {
-                    std::size_t step = static_cast<std::size_t>(std::min<std::uint64_t>(left, chunk.size()));
-                    reader.Read(offset, chunk.data(), step);
-                    hash.Update({chunk.data(), step});
-                    file.write(reinterpret_cast<const char *>(chunk.data()), static_cast<std::streamsize>(step));
-                    offset += step;
-                    left -= step;
-                    done.bytes += step;
-                    report();
-                }
-                file.close();
-                if (!file) {
-                    Fail("write error on {}", target.string());
-                }
-            } catch (...) {
-                file.close();
-                std::error_code ignored;
-                fs::remove(temporary, ignored);
-                throw;
-            }
+        NewFile       file(TemporaryBeside(target));
+        Sha256        hash;
+        Reader        reader(entry.extent.file);
+        std::uint64_t offset = entry.extent.offset;
+        for (std::uint64_t left = entry.extent.size; left != 0;) {
+            std::size_t step = static_cast<std::size_t>(std::min<std::uint64_t>(left, chunk.size()));
+            reader.Read(offset, chunk.data(), step);
+            hash.Update({chunk.data(), step});
+            file.Write({chunk.data(), step});
+            offset += step;
+            left -= step;
+            done.bytes += step;
+            report();
         }
-        fs::rename(temporary, target);
+        file.Replace(target);
         next[entry.path] = {hash.FinishHex(), entry.extent.size, source, entry.extent.offset};
         result.written++;
         result.written_bytes += entry.extent.size;
@@ -297,7 +381,9 @@ inline std::vector<std::string> Verify(const fs::path &root, std::FILE *log = nu
     std::vector<unsigned char> chunk(4 << 20);
     for (const auto &[path, row] : manifest) {
         fs::path file = root / fs::path(path);
-        if (!IsCurrent(file, row.size)) {
+        if (LinkOnTheWay(root, path)) {
+            problems.push_back(std::format("a link, not a file: {}", path));
+        } else if (!IsCurrent(file, row.size)) {
             problems.push_back(std::format("missing or wrong size: {}", path));
         } else if (HashFile(file, 0, row.size, chunk) != row.sha256) {
             problems.push_back(std::format("differs from its extent: {}", path));

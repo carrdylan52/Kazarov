@@ -168,3 +168,70 @@ TEST(DataExtractEntries, RefusesBackslashesThatLeaveTheRoot) {
     EXPECT_THROW(kzdata::ReadManifest(dir / "m"), kzdata::Error);
     fs::remove_all(dir);
 }
+
+namespace {
+
+// Creating a link needs a privilege Windows does not give everyone.
+bool Linked(const fs::path &target, const fs::path &link, bool directory) {
+    std::error_code error;
+    directory ? fs::create_directory_symlink(target, link, error) : fs::create_symlink(target, link, error);
+    return !error;
+}
+
+} // namespace
+
+TEST(DataExtractEntries, RefusesLinksUnderTheRoot) {
+    fs::path dir = TempDir("entries_links");
+    WriteBytes(dir / "source.bin", Pattern(1000, 12));
+    fs::create_directories(dir / "elsewhere");
+    fs::create_directories(dir / "out");
+    if (!Linked(dir / "elsewhere", dir / "out/movie", true)) {
+        fs::remove_all(dir);
+        GTEST_SKIP() << "cannot create links here";
+    }
+    kzdata::Manifest next;
+    EXPECT_THROW(kzdata::ExtractEntries(Entries(dir / "source.bin"), dir / "out", {}, next), kzdata::Error);
+    EXPECT_TRUE(fs::is_empty(dir / "elsewhere"));
+    EXPECT_FALSE(fs::exists(dir / "out/system.cnf"));
+
+    fs::remove(dir / "out/movie");
+    WriteBytes(dir / "elsewhere/kept", Pattern(100, 1));
+    ASSERT_TRUE(Linked(dir / "elsewhere/kept", dir / "out/system.cnf", false));
+    EXPECT_THROW(kzdata::ExtractEntries(Entries(dir / "source.bin"), dir / "out", {}, next), kzdata::Error);
+    EXPECT_EQ(ReadBytes(dir / "elsewhere/kept"), Pattern(100, 1));
+    fs::remove_all(dir);
+}
+
+TEST(DataExtractEntries, WritesNoTemporaryThroughALink) {
+    fs::path dir = TempDir("entries_temporary_link");
+    WriteBytes(dir / "source.bin", Pattern(1000, 13));
+    WriteBytes(dir / "victim", Pattern(10, 2));
+    fs::create_directories(dir / "out/movie");
+    if (!Linked(dir / "victim", dir / "out/.system.cnf.kztmp", false) ||
+        !Linked(dir / "victim", dir / "out/movie/.open1.pss.kztmp", false)) {
+        fs::remove_all(dir);
+        GTEST_SKIP() << "cannot create links here";
+    }
+    Extract(Entries(dir / "source.bin"), dir / "out");
+    EXPECT_EQ(ReadBytes(dir / "victim"), Pattern(10, 2));
+    EXPECT_TRUE(kzdata::Verify(dir / "out").empty());
+    EXPECT_TRUE(NoTemporaries(dir / "out"));
+
+    ASSERT_TRUE(Linked(dir / "victim", dir / "out/.manifest.sha256.kztmp", false));
+    kzdata::WriteFile(dir / "out" / kzdata::kManifestFile, Bytes{'#', '\n'});
+    EXPECT_EQ(ReadBytes(dir / "victim"), Pattern(10, 2));
+    fs::remove_all(dir);
+}
+
+TEST(DataExtractEntries, VerifyReportsLinks) {
+    fs::path dir = TempDir("entries_verify_link");
+    WriteBytes(dir / "source.bin", Pattern(1000, 14));
+    Extract(Entries(dir / "source.bin"), dir / "out");
+    fs::rename(dir / "out/system.cnf", dir / "moved");
+    if (!Linked(dir / "moved", dir / "out/system.cnf", false)) {
+        fs::remove_all(dir);
+        GTEST_SKIP() << "cannot create links here";
+    }
+    EXPECT_EQ(kzdata::Verify(dir / "out").size(), 1u);
+    fs::remove_all(dir);
+}
