@@ -1,7 +1,10 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <random>
+#include <span>
 #include <vector>
 
 #include "data/tim2.hpp"
@@ -101,7 +104,7 @@ TEST(TexTim2, UnswizzleIsAPermutationOfAPage) {
         EXPECT_EQ(hit, 1);
     }
     std::vector<unsigned char> linear(swizzled.size());
-    tim2::Unswizzle8(width, height, swizzled.data(), linear.data());
+    ASSERT_TRUE(tim2::Unswizzle8(width, height, swizzled, linear));
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
             EXPECT_EQ(linear[y * width + x], static_cast<unsigned char>(x ^ y));
@@ -126,4 +129,116 @@ TEST(TexTim2, DecodesEachFormatToLinearTexels) {
     const unsigned char thirty_two[] = {1, 2, 3, 0x40};
     tim2::DecodeLevel(tim2::Format::Rgb32, 1, 1, thirty_two, false, out);
     EXPECT_EQ(out, (std::vector<std::uint8_t>{1, 2, 3, 0x40}));
+}
+
+TEST(TexTim2, ParseRefusesLevelsShortOfTheirSize) {
+    EXPECT_FALSE(tim2::Parse(Tim2File(16, 16, 5, 1, 1024, 256)).has_value());
+    EXPECT_FALSE(tim2::Parse(Tim2File(16, 16, 4, 127, 64, 16)).has_value());
+    EXPECT_FALSE(tim2::Parse(Tim2File(16, 16, 3, 1023, 0, 0)).has_value());
+    EXPECT_FALSE(tim2::Parse(Tim2File(0, 16, 5, 0, 1024, 256)).has_value());
+    EXPECT_FALSE(tim2::Parse(Tim2File(16, 16, 0, 256, 0, 0)).has_value());
+    auto pictures = tim2::Parse(Tim2File(16, 16, 4, 128, 64, 16));
+    ASSERT_TRUE(pictures.has_value());
+    ASSERT_EQ((*pictures)[0].levels.size(), 1u);
+    EXPECT_EQ((*pictures)[0].levels[0].offset, 16u + 0x30);
+    EXPECT_EQ((*pictures)[0].levels[0].size, 128u);
+}
+
+TEST(TexTim2, ParseFindsEachMipmapLevel) {
+    // An 8x8 Index8 picture with two levels: the mipmap header's level sizes follow the GS registers.
+    auto make = [](std::uint32_t second) {
+        constexpr unsigned header = 0x50;
+        std::uint32_t      image = 64 + second;
+        std::vector<unsigned char> file(16 + header + image, 0);
+        std::memcpy(file.data(), "TIM2", 4);
+        file[6] = 1;
+        unsigned char *p = file.data() + 16;
+        p[8] = static_cast<unsigned char>(image);
+        p[0x0C] = header;
+        p[0x11] = 2;
+        p[0x13] = 5;
+        p[0x14] = 8;
+        p[0x16] = 8;
+        p[0x40] = 64;
+        p[0x44] = static_cast<unsigned char>(second);
+        return file;
+    };
+    auto pictures = tim2::Parse(make(16));
+    ASSERT_TRUE(pictures.has_value());
+    const auto &levels = (*pictures)[0].levels;
+    ASSERT_EQ(levels.size(), 2u);
+    EXPECT_EQ(levels[1].offset, 16u + 0x50 + 64);
+    EXPECT_EQ(levels[1].width, 4u);
+    EXPECT_FALSE(tim2::Parse(make(15)).has_value());
+}
+
+TEST(TexTim2, SwizzledBytesReachesTheFurthestTexel) {
+    for (int width : {1, 2, 15, 16, 17, 64, 100, 128, 129, 200, 256, 300}) {
+        for (int height : {1, 2, 3, 16, 31, 32, 63, 64, 65, 100, 128, 129, 192}) {
+            long furthest = -1;
+            for (int y = 0; y < height; y++) {
+                for (int x = 0; x < width; x++) {
+                    furthest = std::max(furthest, tim2::SwizzledOffset(width, height, x, y));
+                }
+            }
+            EXPECT_EQ(tim2::SwizzledBytes(width, height), static_cast<std::uint64_t>(furthest + 1))
+                << width << "x" << height;
+        }
+    }
+}
+
+TEST(TexTim2, DecodeRefusesShortSources) {
+    std::vector<std::uint8_t>  out;
+    std::vector<unsigned char> src(16 * 16 * 4, 0);
+    EXPECT_FALSE(tim2::DecodeLevel(tim2::Format::Index8, 16, 16, std::span(src).first(255), false, out));
+    EXPECT_TRUE(out.empty());
+    EXPECT_FALSE(tim2::DecodeLevel(tim2::Format::Index4, 16, 16, std::span(src).first(127), false, out));
+    EXPECT_FALSE(tim2::DecodeLevel(tim2::Format::Rgb16, 16, 16, std::span(src).first(511), false, out));
+    EXPECT_FALSE(tim2::DecodeLevel(tim2::Format::Rgb24, 16, 16, std::span(src).first(767), false, out));
+    EXPECT_FALSE(tim2::DecodeLevel(tim2::Format::Rgb32, 16, 16, std::span(src).first(1023), false, out));
+    EXPECT_TRUE(tim2::DecodeLevel(tim2::Format::Rgb32, 16, 16, src, false, out));
+
+    EXPECT_EQ(tim2::SourceBytes(tim2::Format::Index8, 128, 64, true), tim2::SwizzledBytes(128, 64));
+    EXPECT_EQ(tim2::SourceBytes(tim2::Format::Rgb16, 128, 64, true), 128u * 64 * 2);
+    std::vector<unsigned char> page(tim2::SwizzledBytes(128, 64));
+    EXPECT_TRUE(tim2::DecodeLevel(tim2::Format::Index8, 128, 64, page, true, out));
+    EXPECT_FALSE(tim2::DecodeLevel(tim2::Format::Index8, 128, 64, std::span(page).first(page.size() - 1), true, out));
+    std::vector<unsigned char> linear(128 * 64);
+    EXPECT_FALSE(tim2::Unswizzle8(128, 64, std::span(page).first(page.size() - 1), linear));
+    EXPECT_FALSE(tim2::Unswizzle8(128, 64, page, std::span(linear).first(linear.size() - 1)));
+}
+
+// Malformed files: whatever Parse accepts decodes from exactly the bytes it names.
+TEST(TexTim2, MalformedHeadersNeverReachPastTheFile) {
+    std::mt19937 random(2026);
+    auto         valid = Tim2File(16, 16, 5, 256, 1024, 256);
+    std::vector<std::uint8_t> out;
+    for (int round = 0; round < 20000; round++) {
+        std::vector<unsigned char> file = valid;
+        int                        changes = 1 + static_cast<int>(random() % 4);
+        for (int i = 0; i < changes; i++) {
+            std::size_t at = 4 + random() % (16 + 0x30 - 4);
+            file[at] = static_cast<unsigned char>(random());
+        }
+        if (random() % 4 == 0) {
+            file.resize(random() % (file.size() + 1));
+        }
+        auto pictures = tim2::Parse(file);
+        if (!pictures) {
+            continue;
+        }
+        for (const tim2::Picture &picture : *pictures) {
+            ASSERT_LE(picture.clut + picture.clut_size, file.size());
+            for (const tim2::Level &level : picture.levels) {
+                ASSERT_LE(level.offset + level.size, file.size());
+                // A copy of exactly the level, so a read past it leaves the allocation.
+                std::vector<unsigned char> bytes(file.begin() + static_cast<std::ptrdiff_t>(level.offset),
+                                                 file.begin() + static_cast<std::ptrdiff_t>(level.offset + level.size));
+                auto format = *tim2::FormatOfImageType(static_cast<int>(picture.image_type));
+                EXPECT_TRUE(tim2::DecodeLevel(format, level.width, level.height, bytes, false, out));
+                tim2::DecodeLevel(format, level.width, level.height, bytes, true, out);
+            }
+            tim2::Colours256(file, picture);
+        }
+    }
 }

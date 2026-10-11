@@ -1,9 +1,12 @@
 #pragma once
 
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <optional>
 #include <span>
+#include <utility>
 #include <vector>
 
 namespace kzdata::tim2 {
@@ -36,6 +39,27 @@ inline std::uint32_t Read32(const unsigned char *p) {
     return p[0] | p[1] << 8 | p[2] << 16 | static_cast<std::uint32_t>(p[3]) << 24;
 }
 
+// One level of a picture's image data, in the file.
+struct Level {
+    std::size_t offset = 0;
+    std::size_t size = 0;
+    unsigned    width = 0;
+    unsigned    height = 0;
+};
+
+// The bytes a linear level of the format holds.
+inline std::uint64_t LevelBytes(Format format, unsigned width, unsigned height) {
+    std::uint64_t texels = static_cast<std::uint64_t>(width) * height;
+    switch (format) {
+        case Format::Index4: return (texels + 1) / 2;
+        case Format::Index8: return texels;
+        case Format::Rgb16: return texels * 2;
+        case Format::Rgb24: return texels * 3;
+        case Format::Rgb32: return texels * 4;
+    }
+    return 0;
+}
+
 struct Picture {
     std::size_t   offset = 0; // of its header, in the file
     std::uint32_t total_size = 0;
@@ -50,10 +74,42 @@ struct Picture {
     unsigned      height = 0;
     std::size_t   image = 0; // offset of the base level, in the file
     std::size_t   clut = 0;  // offset of the CLUT, in the file
+    // Base level first, each inside the image data and large enough for its size and format.
+    std::vector<Level> levels;
 };
 
+// The levels of a picture whose image data starts at `image` in `file`, or none when one does not
+// fit. A picture with mipmaps lists each level's size after the GS registers in its header.
+inline std::optional<std::vector<Level>> ParseLevels(std::span<const unsigned char> file, const Picture &picture) {
+    std::optional<Format> format = FormatOfImageType(static_cast<int>(picture.image_type));
+    unsigned              count = std::max(picture.mipmaps, 1u);
+    if (!format || picture.width == 0 || picture.height == 0 || count > 7 ||
+        (count > 1 && picture.header_size < 0x40 + 4 * count)) {
+        return std::nullopt;
+    }
+    std::vector<Level> levels;
+    std::uint64_t      at = picture.image;
+    std::uint64_t      end = static_cast<std::uint64_t>(picture.image) + picture.image_size;
+    for (unsigned i = 0; i < count; i++) {
+        Level level;
+        level.width = std::max(picture.width >> i, 1u);
+        level.height = std::max(picture.height >> i, 1u);
+        std::uint64_t needed = LevelBytes(*format, level.width, level.height);
+        std::uint64_t size = count > 1 ? Read32(file.data() + picture.offset + 0x40 + 4 * i) : picture.image_size;
+        if (size < needed || size > end - at) {
+            return std::nullopt;
+        }
+        level.offset = static_cast<std::size_t>(at);
+        level.size = static_cast<std::size_t>(size);
+        levels.push_back(level);
+        at += size;
+    }
+    return levels;
+}
+
 // The pictures of a TIM2 file. A picture's total size is not trusted (the games' files get it
-// wrong); the header, image and CLUT sizes are, and each must lie inside the file.
+// wrong); the header, image and CLUT sizes are, and each must lie inside the file, as must every
+// level the image data holds.
 inline std::optional<std::vector<Picture>> Parse(std::span<const unsigned char> file) {
     if (file.size() < 16 || std::memcmp(file.data(), "TIM2", 4) != 0) {
         return std::nullopt;
@@ -62,7 +118,7 @@ inline std::optional<std::vector<Picture>> Parse(std::span<const unsigned char> 
     std::size_t          at = file[5] == 1 ? 128 : 16;
     std::vector<Picture> pictures;
     for (unsigned i = 0; i < count; i++) {
-        if (at + 0x30 > file.size()) {
+        if (at > file.size() || file.size() - at < 0x30) {
             return std::nullopt;
         }
         const unsigned char *p = file.data() + at;
@@ -84,8 +140,13 @@ inline std::optional<std::vector<Picture>> Parse(std::span<const unsigned char> 
             picture.clut_size > file.size() - picture.clut) {
             return std::nullopt;
         }
-        pictures.push_back(picture);
+        std::optional<std::vector<Level>> levels = ParseLevels(file, picture);
+        if (!levels) {
+            return std::nullopt;
+        }
+        picture.levels = std::move(*levels);
         at = picture.clut + picture.clut_size;
+        pictures.push_back(std::move(picture));
     }
     return pictures;
 }
@@ -104,7 +165,8 @@ constexpr unsigned ClutCsm1(unsigned position) {
 
 // The colours of an 8-bit picture's 256-entry CLUT as RGB, in file order, or none.
 inline std::vector<std::uint32_t> Colours256(std::span<const unsigned char> file, const Picture &picture) {
-    if (picture.image_type != 5 || picture.clut_colors != 256 || picture.clut + 1024 > file.size()) {
+    if (picture.image_type != 5 || picture.clut_colors != 256 || picture.clut_size < 1024 ||
+        picture.clut + 1024 > file.size()) {
         return {};
     }
     std::vector<std::uint32_t> colours(256);
@@ -166,21 +228,54 @@ inline long SwizzledOffset(int width, int height, int x, int y) {
            static_cast<long>(page_row) * row_bytes * pages_x + page_column;
 }
 
-inline void Unswizzle8(int width, int height, const unsigned char *swizzled, unsigned char *linear) {
+// The bytes an 8-bit level in the page swizzle's order spans: one past the furthest texel's.
+inline std::uint64_t SwizzledBytes(int width, int height) {
+    if (width <= 0 || height <= 0) {
+        return 0;
+    }
+    // Each row of pages lies above the last, so the furthest texel is in the bottom one.
+    long furthest = -1;
+    for (int y = (height - 1) & ~63; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            furthest = std::max(furthest, SwizzledOffset(width, height, x, y));
+        }
+    }
+    return static_cast<std::uint64_t>(furthest + 1);
+}
+
+// False, leaving linear untouched, when either span is short of the level.
+inline bool Unswizzle8(int width, int height, std::span<const unsigned char> swizzled,
+                       std::span<unsigned char> linear) {
+    if (width <= 0 || height <= 0 || swizzled.size() < SwizzledBytes(width, height) ||
+        linear.size() < static_cast<std::uint64_t>(width) * height) {
+        return false;
+    }
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
             long offset = SwizzledOffset(width, height, x, y);
             linear[static_cast<std::size_t>(y) * width + x] = offset < 0 ? 0 : swizzled[offset];
         }
     }
+    return true;
+}
+
+// The bytes DecodeLevel reads for a level: only 8-bit pixels come swizzled.
+inline std::uint64_t SourceBytes(Format format, unsigned width, unsigned height, bool swizzled) {
+    return swizzled && format == Format::Index8 ? SwizzledBytes(static_cast<int>(width), static_cast<int>(height))
+                                                : LevelBytes(format, width, height);
 }
 
 // One level as linear texels: an index byte per texel for the index formats, r,g,b,a bytes
 // otherwise, alpha still in GS units (0x80 opaque). `swizzled`: 8-bit pixels in the page order
-// Unswizzle8 undoes.
-inline void DecodeLevel(Format format, unsigned width, unsigned height, const unsigned char *src, bool swizzled,
-                        std::vector<std::uint8_t> &out) {
+// Unswizzle8 undoes. False, with `out` empty, when `src` is short of the level.
+inline bool DecodeLevel(Format format, unsigned width, unsigned height, std::span<const unsigned char> src,
+                        bool swizzled, std::vector<std::uint8_t> &out) {
+    out.clear();
     std::size_t texels = static_cast<std::size_t>(width) * height;
+    if (width == 0 || height == 0 || width > 0xFFFF || height > 0xFFFF ||
+        src.size() < SourceBytes(format, width, height, swizzled)) {
+        return false;
+    }
     switch (format) {
         case Format::Index4:
             out.resize(texels);
@@ -192,9 +287,9 @@ inline void DecodeLevel(Format format, unsigned width, unsigned height, const un
         case Format::Index8:
             out.resize(texels);
             if (swizzled) {
-                Unswizzle8(static_cast<int>(width), static_cast<int>(height), src, out.data());
+                Unswizzle8(static_cast<int>(width), static_cast<int>(height), src, out);
             } else {
-                std::memcpy(out.data(), src, texels);
+                std::memcpy(out.data(), src.data(), texels);
             }
             break;
         case Format::Rgb16:
@@ -219,9 +314,12 @@ inline void DecodeLevel(Format format, unsigned width, unsigned height, const un
             }
             break;
         case Format::Rgb32:
-            out.assign(src, src + texels * 4);
+            out.assign(src.begin(), src.begin() + static_cast<std::ptrdiff_t>(texels * 4));
             break;
+        default:
+            return false;
     }
+    return true;
 }
 
 } // namespace kzdata::tim2
