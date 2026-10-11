@@ -4,11 +4,13 @@
 #include <cstdio>
 #include <cstdlib>
 
+#include "app/app_info.hpp"
+
 namespace audio {
 
 bool TraceEnabled() {
     static const bool enabled = [] {
-        const char *setting = std::getenv("DC_AUDIO_TRACE");
+        const char *setting = std::getenv(KZ_APP_ENV("AUDIO_TRACE"));
         return setting != nullptr && *setting != '\0' && *setting != '0';
     }();
     return enabled;

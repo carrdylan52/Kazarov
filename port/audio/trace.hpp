@@ -2,7 +2,7 @@
 
 namespace audio {
 
-// DC_AUDIO_TRACE=1: one line on stderr for every driver call and every sequence event, so a run
+// <ENV_PREFIX>AUDIO_TRACE=1: one line on stderr for every driver call and every sequence event, so a run
 // can be compared with what the game asked for.
 bool TraceEnabled();
 

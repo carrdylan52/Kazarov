@@ -5,12 +5,12 @@
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <atomic>
 #include <map>
 #include <mutex>
 #include <string>
 #include <system_error>
 
-#include "options/config_game.hpp"
 #include "platform/paths.hpp"
 #include "trace.hpp"
 
@@ -33,6 +33,7 @@ std::mutex                   g_mutex;
 bool                         g_read = false;
 std::filesystem::path        g_folder;
 std::map<std::string, Entry> g_entries;
+std::atomic<bool>            g_enabled = false;
 
 void ReadMapping() {
     g_read = true;
@@ -106,7 +107,7 @@ bool SoundtrackEnsure() {
 }
 
 std::shared_ptr<const PcmTrack> SoundtrackFor(std::string_view sequence) {
-    if (!ConfigGet().soundtrack) {
+    if (!g_enabled) {
         return nullptr;
     }
     std::lock_guard lock(g_mutex);
@@ -133,6 +134,10 @@ std::shared_ptr<const PcmTrack> SoundtrackFor(std::string_view sequence) {
         entry.loaded = std::move(track);
     }
     return entry.loaded;
+}
+
+void SoundtrackSetEnabled(bool enabled) {
+    g_enabled = enabled;
 }
 
 void SoundtrackReload() {
