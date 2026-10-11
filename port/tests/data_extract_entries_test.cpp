@@ -291,3 +291,15 @@ TEST(DataExtractEntries, TemporaryFilesAreNeverShared) {
     EXPECT_TRUE(NoTemporaries(dir));
     fs::remove_all(dir);
 }
+
+TEST(DataExtractEntries, AFailedRenameLeavesNoTemporary) {
+    fs::path dir = TempDir("entries_failed_rename");
+    fs::create_directories(dir / "target/inside");
+    {
+        kzdata::NewFile file(kzdata::TemporaryBeside(dir / "target"));
+        file.Write(Bytes{'x'});
+        EXPECT_ANY_THROW(file.Replace(dir / "target"));
+    }
+    EXPECT_TRUE(NoTemporaries(dir));
+    fs::remove_all(dir);
+}

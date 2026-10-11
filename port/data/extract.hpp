@@ -148,12 +148,18 @@ public:
         }
     }
 
-    // Closes the file and renames it over target; until then the destructor removes it.
+    // Closes the file and renames it over target; until then, or if that fails, it is removed.
     void Replace(const fs::path &target) {
-        if (CloseFd() != 0) {
-            Fail("write error on {}", path_.string());
+        int             closed = CloseFd();
+        std::error_code error;
+        if (closed == 0) {
+            fs::rename(path_, target, error);
         }
-        fs::rename(path_, target);
+        if (closed != 0 || error) {
+            std::error_code ignored;
+            fs::remove(path_, ignored);
+            Fail("cannot write {}: {}", target.string(), closed != 0 ? "write error" : error.message());
+        }
     }
 
 private:
