@@ -62,6 +62,62 @@ TEST(GfxMisc, PipelineCache) {
     std::filesystem::remove(cache);
 }
 
+TEST(GfxMisc, NoLatePipelines) {
+    std::filesystem::path cache = std::filesystem::temp_directory_path() / "dc_gfx_test" /
+                                  ("pipeline_cache_late_" + std::to_string(getpid()) + ".bin");
+    std::filesystem::remove(cache);
+    GfxOptions options{.pipeline_cache = cache};
+    // The first start compiles against an empty cache, the second against the one it saved.
+    for (int start = 0; start < 2; start++) {
+        GfxFixture fixture(640, 480, 1.0f, options);
+        ASSERT_EQ(gfx::PipelineStats().created_at_init, gfx::PipelineCount());
+        ASSERT_EQ(gfx::PipelineStats().created_later, 0u);
+
+        gfx::TextureHandle rgba = gfx::CreateTexture({4, 4, gfx::TextureFormat::Rgba8, 1, true});
+        gfx::TextureHandle index = gfx::CreateTexture({4, 4, gfx::TextureFormat::Index8, 1, true});
+        gfx::TextureHandle palette = gfx::CreatePalette();
+        ASSERT_NE(rgba, gfx::kNullTexture);
+        ASSERT_NE(index, gfx::kNullTexture);
+        ASSERT_NE(palette, gfx::kNullTexture);
+        gfx::TextureBinding bindings[3];
+        bindings[1].texture = rgba;
+        bindings[2].texture = index;
+        bindings[2].palette = palette;
+
+        gfx::MeshConstants constants = {};
+        constants.mvp[0] = constants.mvp[5] = constants.mvp[10] = constants.mvp[15] = 1.0f;
+        const gfx::Vertex3D triangle[3] = {
+            {{-0.5f, -0.5f, 0.5f}, {0, 0, 1}, {0, 0}, {255, 255, 255, 255}},
+            {{0.5f, -0.5f, 0.5f},  {0, 0, 1}, {1, 0}, {255, 255, 255, 255}},
+            {{0.0f, 0.5f, 0.5f},   {0, 0, 1}, {0, 1}, {255, 255, 255, 255}}
+        };
+        const uint32_t indices[3] = {0, 1, 2};
+
+        fixture.Frame({0, 0, 0, 0x80}, [&] {
+            for (const gfx::TextureBinding &binding : bindings) {
+                for (int variant = 0; variant < 4; variant++) {
+                    gfx::DrawState state;
+                    state.blend = variant & 1;
+                    state.alpha.d = variant & 2 ? 2 : 1;
+                    state.alpha_test = variant & 2;
+                    state.alpha_func = gfx::AlphaFunc::GEqual;
+                    state.alpha_ref = 0x40;
+                    auto quad = Quad(10.0f * variant, 10, 8, 8, {0x80, 0x80, 0x80, 0x80}, 0, 0, 4, 4);
+                    gfx::Draw2D(gfx::Primitive::Quads, quad, binding, state);
+                    gfx::Draw2D(gfx::Primitive::Lines, std::span(quad).first(2), binding, state);
+                    gfx::DrawMeshImmediate(triangle, indices, constants, binding, state);
+                }
+            }
+        });
+        EXPECT_EQ(gfx::PipelineStats().created_at_init, gfx::PipelineCount());
+        EXPECT_EQ(gfx::PipelineStats().created_later, 0u);
+        gfx::DestroyTexture(rgba);
+        gfx::DestroyTexture(index);
+        gfx::DestroyTexture(palette);
+    }
+    std::filesystem::remove(cache);
+}
+
 TEST(GfxMisc, TextureLimits) {
     GfxFixture fixture;
     // Past the device's maxImageDimension2D: an error, not a crash.

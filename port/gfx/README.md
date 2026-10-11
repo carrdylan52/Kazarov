@@ -230,6 +230,11 @@ test, depth write, compare op, the whole stencil state, cull mode, front face, v
 and topology within a class are dynamic state, so they add none. The cache file is checked against the device before use and written through a temporary
 file and a rename.
 
+No pipeline is created after `RendererInit`: `PipelineStats()` reports `created_at_init` (the count
+above) and `created_later`, which `GfxMisc.NoLatePipelines` and `RendererShutdown`'s log line hold
+at 0. A new `MeshConstants` flag is therefore a uniform branch in the shaders, not a variant,
+unless this section and the count change with it.
+
 ## Readback
 
 - `ReadDepth(id, rect)` (16 ids) reads the main depth buffer at `EndFrame` (or at the end of a

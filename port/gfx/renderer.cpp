@@ -808,12 +808,14 @@ void RendererInit(SDL_Window *window, const RendererConfig &config) {
             ? config.render_scale
             : std::max(1.0f, std::round(static_cast<float>(g.swapchain.extent.height) / LogicalHeight()));
     CreatePipelines();
+    g.initialized = true;
 }
 
 void RendererShutdown() {
     if (g.device == VK_NULL_HANDLE) {
         return;
     }
+    std::fprintf(stderr, "gfx: %u pipelines created after init\n", g.pipeline_counts.created_later);
     g.list.reset();
     vkDeviceWaitIdle(g.device);
     for (Frame &frame : g.frames) {

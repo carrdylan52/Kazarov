@@ -289,6 +289,8 @@ struct Context {
     uint32_t                     blend_slot_count = 0;
     std::array<BlendMapping, 81> blend_map = {};
     double                       pipeline_seconds = 0.0;
+    PipelineCounts               pipeline_counts = {};
+    bool                         initialized = false;
 
     std::vector<Texture>                              textures;
     std::map<std::string, TextureHandle, std::less<>> named_targets;

@@ -128,6 +128,15 @@ bool InFrame();
 // Validation-layer messages seen so far (validation and performance types, warning or worse).
 uint32_t ValidationMessageCount();
 uint32_t PipelineCount();
+
+struct PipelineCounts {
+    uint32_t created_at_init = 0;
+    uint32_t created_later = 0;
+};
+
+// Every variant is created in RendererInit (README, "Pipelines"); one created later is a hitch the
+// precompile missed.
+PipelineCounts PipelineStats();
 // Pipelines created during init versus found in the loaded pipeline cache are not
 // distinguishable through Vulkan, so this is only the time RendererInit spent creating them.
 double PipelineCompileSeconds();

@@ -597,6 +597,7 @@ void CreatePipelines() {
         }
     }
     Check(failure, "vkCreateGraphicsPipelines");
+    (g.initialized ? g.pipeline_counts.created_later : g.pipeline_counts.created_at_init) += total;
 
     vkDestroyShaderModule(g.device, draw2d_module, nullptr);
     vkDestroyShaderModule(g.device, mesh_module, nullptr);
@@ -622,5 +623,7 @@ void DestroyPipelines() {
 uint32_t PipelineCount() { return static_cast<uint32_t>(detail::g.pipelines.size()); }
 
 double PipelineCompileSeconds() { return detail::g.pipeline_seconds; }
+
+PipelineCounts PipelineStats() { return detail::g.pipeline_counts; }
 
 } // namespace gfx
