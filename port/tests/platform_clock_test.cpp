@@ -6,7 +6,7 @@
 #include <thread>
 #include <vector>
 
-#include "../platform/clock.hpp"
+#include "platform/clock.hpp"
 
 namespace {
 

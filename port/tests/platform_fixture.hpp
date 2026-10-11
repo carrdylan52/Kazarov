@@ -16,7 +16,7 @@
 #include <unistd.h>
 #endif
 
-namespace dc::test {
+namespace kz::test {
 
 inline int ProcessId() {
 #ifdef _WIN32
@@ -69,27 +69,27 @@ int ChildStatus(F body) {
 }
 #endif
 
-} // namespace dc::test
+} // namespace kz::test
 
 #ifdef _WIN32
-#define DC_ASSERT_EXIT(body, code) ASSERT_EXIT({ body(); std::_Exit(0); }, ::testing::ExitedWithCode(code), "")
+#define KZ_ASSERT_EXIT(body, code) ASSERT_EXIT({ body(); std::_Exit(0); }, ::testing::ExitedWithCode(code), "")
 // UCRT abort exits with status 3; a guard-page write reports an NT access violation.
-#define DC_ASSERT_ABORT(body) DC_ASSERT_EXIT(body, 3)
-#define DC_ASSERT_FAULT(body) DC_ASSERT_EXIT(body, static_cast<int>(0xC0000005))
+#define KZ_ASSERT_ABORT(body) KZ_ASSERT_EXIT(body, 3)
+#define KZ_ASSERT_FAULT(body) KZ_ASSERT_EXIT(body, static_cast<int>(0xC0000005))
 #else
-#define DC_ASSERT_EXIT(body, code)                                       \
+#define KZ_ASSERT_EXIT(body, code)                                       \
     do {                                                                 \
-        int status = ::dc::test::ChildStatus(body);                      \
+        int status = ::kz::test::ChildStatus(body);                      \
         ASSERT_TRUE(WIFEXITED(status) && WEXITSTATUS(status) == (code)); \
     } while (false)
-#define DC_ASSERT_ABORT(body)                                            \
+#define KZ_ASSERT_ABORT(body)                                            \
     do {                                                                 \
-        int status = ::dc::test::ChildStatus(body);                      \
+        int status = ::kz::test::ChildStatus(body);                      \
         ASSERT_TRUE(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT); \
     } while (false)
-#define DC_ASSERT_FAULT(body)                                                                            \
+#define KZ_ASSERT_FAULT(body)                                                                            \
     do {                                                                                                 \
-        int status = ::dc::test::ChildStatus(body);                                                      \
+        int status = ::kz::test::ChildStatus(body);                                                      \
         ASSERT_TRUE(WIFSIGNALED(status) && (WTERMSIG(status) == SIGSEGV || WTERMSIG(status) == SIGBUS)); \
     } while (false)
 #endif

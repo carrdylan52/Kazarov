@@ -1,8 +1,8 @@
 #include <SDL3/SDL.h>
 #include <gtest/gtest.h>
 
-#include "../platform/mouse.hpp"
-#include "../platform/window.hpp"
+#include "platform/mouse.hpp"
+#include "platform/window.hpp"
 
 namespace {
 void Pump() {

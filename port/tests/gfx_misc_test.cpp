@@ -8,7 +8,7 @@
 #include "gfx/requirements.hpp"
 #include "gfx_fixture.hpp"
 
-using namespace dc::test;
+using namespace kz::test;
 
 namespace {
 
@@ -32,7 +32,7 @@ uint32_t Crc(const uint8_t *data, size_t size) {
 
 TEST(GfxMisc, PipelineCache) {
     // Its own file: the other cases share theirs, and save over it while they run.
-    std::filesystem::path cache = std::filesystem::temp_directory_path() / "dc_gfx_test" /
+    std::filesystem::path cache = std::filesystem::temp_directory_path() / "kz_gfx_test" /
                                   ("pipeline_cache_" + std::to_string(getpid()) + ".bin");
     std::filesystem::remove(cache);
     GfxOptions options{.pipeline_cache = cache};
@@ -64,7 +64,7 @@ TEST(GfxMisc, PipelineCache) {
 }
 
 TEST(GfxMisc, NoLatePipelines) {
-    std::filesystem::path cache = std::filesystem::temp_directory_path() / "dc_gfx_test" /
+    std::filesystem::path cache = std::filesystem::temp_directory_path() / "kz_gfx_test" /
                                   ("pipeline_cache_late_" + std::to_string(getpid()) + ".bin");
     std::filesystem::remove(cache);
     GfxOptions options{.pipeline_cache = cache};
@@ -193,7 +193,7 @@ TEST(GfxMisc, Png) {
         auto quad = Quad(0, 0, 320, 480, {200, 100, 50, 0x80});
         gfx::Draw2D(gfx::Primitive::Quads, quad, {}, gfx::DrawState{});
     });
-    std::filesystem::path path = std::filesystem::temp_directory_path() / "dc_gfx_test" / "frame.png";
+    std::filesystem::path path = std::filesystem::temp_directory_path() / "kz_gfx_test" / "frame.png";
     ASSERT_TRUE(gfx::WritePng(path, fixture.pixels.data(), fixture.width, fixture.height));
 
     std::ifstream        file(path, std::ios::binary);

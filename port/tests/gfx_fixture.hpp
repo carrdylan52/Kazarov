@@ -10,15 +10,16 @@
 #include <filesystem>
 #include <vector>
 
+#include "app/app_info.hpp"
 #include "gfx/gfx.hpp"
 #include "platform/window.hpp"
 #include "platform_fixture.hpp"
 
-namespace dc::test {
+namespace kz::test {
 
-// DC_GFX_OFFSCREEN=1 runs every gfx test on the renderer's surface-less path.
+// <prefix>GFX_OFFSCREEN=1 runs every gfx test on the renderer's surface-less path.
 inline bool OffscreenByDefault() {
-    const char *setting = std::getenv("DC_GFX_OFFSCREEN");
+    const char *setting = std::getenv(KZ_APP_ENV("GFX_OFFSCREEN"));
     return setting != nullptr && *setting != '\0' && *setting != '0';
 }
 
@@ -28,7 +29,7 @@ struct GfxOptions {
     bool offscreen = OffscreenByDefault();
     bool triangle_fans = true;
     bool separate_stencil_masks = true;
-    std::filesystem::path pipeline_cache = std::filesystem::temp_directory_path() / "dc_gfx_test" / "pipeline_cache.bin";
+    std::filesystem::path pipeline_cache = std::filesystem::temp_directory_path() / "kz_gfx_test" / "pipeline_cache.bin";
 };
 
 // A headless window and renderer with validation on. Any validation message fails the test.
@@ -39,7 +40,7 @@ struct GfxFixture {
 
     GfxFixture(int width, int height, float render_scale, const GfxOptions &options) {
         // Synchronization validation too, unless the environment already chose layer features.
-        dc::test::SetEnv("VK_LAYER_VALIDATE_SYNC", "1", 0);
+        SetEnv("VK_LAYER_VALIDATE_SYNC", "1", 0);
         WindowConfig window{width, height, true};
         window.vulkan = !options.offscreen;
         WindowInit(window);
@@ -132,4 +133,4 @@ inline uint32_t Rgba(uint8_t r, uint8_t g, uint8_t b, uint8_t a = 0xFF) {
            static_cast<uint32_t>(a) << 24;
 }
 
-} // namespace dc::test
+} // namespace kz::test

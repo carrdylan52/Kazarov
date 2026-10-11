@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <utility>
 
-#include "../platform/gamepad_map.hpp"
+#include "platform/gamepad_map.hpp"
 
 // A DualShock 2 puts Select where a DualShock 4 or DualSense has its Share/Create button, but those
 // pads report the touchpad click apart from it, and players reach for the touchpad as Select
