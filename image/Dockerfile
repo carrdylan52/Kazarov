@@ -65,7 +65,8 @@ ENV MWCCPS2_DEBUGGER_DIR=/opt/kazarov/mwccps2-debugger
 ENV KZ_MWCC_DEBUG_DIR=/opt/kazarov/mwcc-debug
 ENV LLDB_DEBUGSERVER_PATH=/usr/lib/llvm-19/bin/lldb-server
 
-# Build tools, debuggers, and the libraries the PC port links against.
+# Build tools, debuggers, the libraries the PC port links against, and the Vulkan
+# validation layer its tests run under.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
@@ -88,6 +89,8 @@ RUN apt-get update \
         libsdl3-dev \
         libvulkan-dev \
         mesa-vulkan-drivers \
+        vulkan-validationlayers \
+        vulkan-tools \
         nlohmann-json3-dev \
         glslang-tools \
         libgtest-dev \
