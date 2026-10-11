@@ -234,3 +234,109 @@ def test_missing_runner_fails(root, tmp_path):
                "a/foo.cpp", KZ_MWCC_RUNNER="no-such-runner-kz-test")
     assert proc.returncode != 0
     assert not (root / "build/a/foo.o").exists()
+
+
+def batch_command(outdir, dep, sources, flags=("-c", "-i", "ps2/include", "-lang", "c++")):
+    return [str(KZ_MWCC), "--batch", "--outdir", outdir, "--depfile", dep, "--",
+            *flags, *sources]
+
+
+def run_batch(root, log, sources, flags=("-c", "-i", "ps2/include", "-lang", "c++"), **extra):
+    return subprocess.run(batch_command("build/whole", "build/whole/batch.d", sources, flags),
+                          cwd=root, env=compile_env(log, **extra), capture_output=True, text=True)
+
+
+def test_batch_compiles_every_source_in_one_run(root, tmp_path):
+    (root / "a/bar.c").write_text("int g;\n")
+    log = tmp_path / "log.json"
+    before = root_listing(root)
+    proc = run_batch(root, log, ["a/foo.cpp", "a/bar.c"])
+    assert proc.returncode == 0, proc.stderr
+
+    argv = record(log)["argv"]
+    assert argv[-2:] == ["a/foo.cpp", "a/bar.c"]
+    assert Path(argv[-3]).parent == root / "build/whole"
+    whole = root / "build/whole"
+    assert sorted(os.listdir(whole)) == ["bar.c.o", "batch.d", "foo.cpp.o"]
+    assert (whole / "foo.cpp.o").read_text() == "object for a/foo.cpp\n"
+    assert (whole / "bar.c.o").read_text() == "object for a/bar.c\n"
+
+    # The maps are merged in name order, each header listed once.
+    deps = [root / "a/bar.c", root / "ps2/include/common.h", root / "own.h",
+            root / "private/win.h", root / "a/foo.cpp"]
+    expected = ("%s %s:" % (whole / "foo.cpp.o", whole / "bar.c.o")
+                + "".join(" \\\n\t%s" % dep for dep in deps) + "\n")
+    assert (whole / "batch.d").read_text() == expected
+    assert root_listing(root) == before
+
+
+def test_batch_options_with_arguments_are_not_sources(root, tmp_path):
+    (root / "a/bar.c").write_text("int g;\n")
+    log = tmp_path / "log.json"
+    flags = ("-c", "-pragma", "divbyzerocheck on", "-strings", "readonly", "-i", "ps2/include")
+    assert run_batch(root, log, ["a/foo.cpp", "a/bar.c"], flags).returncode == 0
+    argv = record(log)["argv"]
+    assert argv[:len(flags) + 1] == ["-c", *flags]
+    assert argv[-2:] == ["a/foo.cpp", "a/bar.c"]
+
+
+def test_batch_rejects_sources_that_share_an_object_name(root, tmp_path):
+    log = tmp_path / "log.json"
+    proc = run_batch(root, log, list(SOURCES))
+    assert proc.returncode == 2
+    assert "a/foo.cpp and b/foo.cpp would both compile to foo.o" in proc.stderr
+    assert not log.exists()
+
+
+@pytest.mark.parametrize("args", [
+    ["--batch", "--obj", "x.o", "--outdir", "build/w", "--", "-c", "a/foo.cpp"],
+    ["--batch", "--depfile", "x.d", "--", "-c", "a/foo.cpp"],
+    ["--batch", "--outdir", "build/w", "--", "-c", "-i", "ps2/include"],
+])
+def test_batch_usage_errors(root, tmp_path, args):
+    proc = subprocess.run([str(KZ_MWCC), *args], cwd=root,
+                          env=compile_env(tmp_path / "log.json"), capture_output=True, text=True)
+    assert proc.returncode == 2
+    assert "usage: kz-mwcc" in proc.stderr
+
+
+@pytest.mark.parametrize("extra, code", [({"FAKE_MWCC_EXIT": "3"}, 3),
+                                         ({"FAKE_MWCC_OUTPUT": "none"}, 1),
+                                         ({"FAKE_MWCC_OUTPUT": "empty"}, 1)])
+def test_batch_leaves_no_object_when_one_is_missing(root, tmp_path, extra, code):
+    (root / "a/bar.c").write_text("int g;\n")
+    whole = root / "build/whole"
+    whole.mkdir(parents=True)
+    for name in ("foo.cpp.o", "bar.c.o", "batch.d"):
+        (whole / name).write_text("stale\n")
+    proc = run_batch(root, tmp_path / "log.json", ["a/foo.cpp", "a/bar.c"], **extra)
+    assert proc.returncode == code
+    assert os.listdir(whole) == []
+
+
+def test_batch_missing_maps_fail_when_a_dependency_flag_is_given(root, tmp_path):
+    (root / "a/bar.c").write_text("int g;\n")
+    proc = run_batch(root, tmp_path / "log.json", ["a/foo.cpp", "a/bar.c"],
+                     ("-c", "-MD", "-i", "ps2/include"), FAKE_MWCC_DEP="none")
+    assert proc.returncode == 1
+    assert "no dependency map" in proc.stderr
+    assert os.listdir(root / "build/whole") == []
+
+
+def test_batch_merges_maps_left_in_the_private_directory(root, tmp_path):
+    proc = run_batch(root, tmp_path / "log.json", ["a/foo.cpp"], FAKE_MWCC_DEP="cwd")
+    assert proc.returncode == 0, proc.stderr
+    whole = root / "build/whole"
+    text = (whole / "batch.d").read_text()
+    assert text.startswith("%s:" % (whole / "foo.cpp.o"))
+    assert "%s/a/foo.cpp" % root in text
+
+
+def test_batch_without_maps_names_every_object(root, tmp_path):
+    (root / "a/bar.c").write_text("int g;\n")
+    proc = run_batch(root, tmp_path / "log.json", ["a/foo.cpp", "a/bar.c"],
+                     FAKE_MWCC_DEP="none")
+    assert proc.returncode == 0, proc.stderr
+    whole = root / "build/whole"
+    assert (whole / "batch.d").read_text() == "%s %s:\n" % (whole / "foo.cpp.o",
+                                                            whole / "bar.c.o")

@@ -1,6 +1,6 @@
 # Graph fixture for tests/cmake/test_graph.py: two compiled units sharing a header, one with
-# a private header, a RAW unit, one assembled unit split out of a checksummed input, and a POST
-# tool.
+# a private header, a RAW unit, a batch of two units compiled in one run, one assembled unit
+# split out of a checksummed input, and a POST tool.
 cmake_minimum_required(VERSION 3.20)
 project(kz_graph_fixture NONE)
 
@@ -54,10 +54,15 @@ kz_mwcc_object(${OBJ_DIR}/c.o src/c.c
     ENV FIXTURE_RAW=1
     POST COMMAND ${CMAKE_COMMAND} -E copy ${OBJ_DIR}/c.raw.o ${OBJ_DIR}/c.o)
 
+kz_mwcc_batch(${OBJ_DIR}/whole
+    SOURCES src/d.c src/e.c
+    FLAGS ${FLAGS}
+    OBJECTS batch_objs)
+
 kz_asm_object(${OBJ_DIR}/unit_c.o ${ASM_DIR}/unit_c.s
     DEPENDS ${KZ_SPLIT_STAMP})
 
 kz_object_dirs(${OBJ_DIR}/a.o ${OBJ_DIR}/b.o ${OBJ_DIR}/c.o ${OBJ_DIR}/unit_c.o)
 
 add_custom_target(objects ALL DEPENDS
-    ${OBJ_DIR}/a.o ${OBJ_DIR}/b.o ${OBJ_DIR}/c.o ${OBJ_DIR}/unit_c.o)
+    ${OBJ_DIR}/a.o ${OBJ_DIR}/b.o ${OBJ_DIR}/c.o ${OBJ_DIR}/unit_c.o ${batch_objs})

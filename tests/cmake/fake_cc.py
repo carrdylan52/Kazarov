@@ -2,6 +2,9 @@
 """Stand-in for the compiler in tests/cmake: writes -o, and with -MD a <stem>.d in the cwd.
 
     fake_cc.py [flags] -o OBJ SOURCE
+    fake_cc.py [flags] -o DIR SOURCE...
+
+With several sources, as MWCC does, it writes DIR/<stem>.o and the map DIR/<stem>.d for each.
 
 The object holds the source text. The depfile lists the source and every #include "..."
 reached from it, searched beside the including file and then in the -i/-I directories,
@@ -33,7 +36,8 @@ def reached(path, dirs, seen):
 
 
 def main(argv):
-    out = source = None
+    out = None
+    sources = []
     dirs = []
     want_map = False
     i = 0
@@ -50,11 +54,20 @@ def main(argv):
         if arg == "-MD":
             want_map = True
         elif not arg.startswith("-"):
-            source = arg
+            sources.append(arg)
         i += 1
-    if out is None or source is None:
+    if out is None or not sources:
         sys.exit("fake_cc: needs -o OBJ and a SOURCE")
+    if len(sources) == 1:
+        compile_one(sources[0], out, dirs, want_map, ".")
+    else:
+        for source in sources:
+            stem = os.path.splitext(os.path.basename(source))[0]
+            compile_one(source, os.path.join(out, stem + ".o"), dirs, want_map, out)
+    return 0
 
+
+def compile_one(source, out, dirs, want_map, map_dir):
     deps = []
     reached(source, dirs, deps)
     with open(source, encoding="utf-8") as f:
@@ -64,9 +77,8 @@ def main(argv):
 
     if want_map:
         stem = os.path.splitext(os.path.basename(source))[0]
-        with open(stem + ".d", "w", encoding="utf-8") as f:
+        with open(os.path.join(map_dir, stem + ".d"), "w", encoding="utf-8") as f:
             f.write("%s.o: %s\n" % (stem, " ".join(deps)))
-    return 0
 
 
 if __name__ == "__main__":

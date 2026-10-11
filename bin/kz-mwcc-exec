@@ -12,6 +12,11 @@ If KZ_DEPFILE names a file that does not exist yet and the compiler left a regul
 in its directory, that map is rewritten into KZ_DEPFILE: paths become absolute under the root
 and KZ_DEPFILE_TARGET is the target. The map's name does not matter; it may be named after the
 source or the object.
+
+A run over several sources writes one map per source beside the objects, so KZ_DEPFILE_DIR
+names that directory too (relative to the root), and every regular *.d file there and in the
+private directory is merged into the one rule. KZ_DEPFILE_TARGET then lists the targets, one
+per line.
 """
 
 import os
@@ -91,10 +96,23 @@ def dependency_paths(text, root, temp_prefixes):
     return deps
 
 
+def all_maps(directory):
+    """Every regular *.d file of a directory, in name order."""
+    names = sorted(name for name in os.listdir(directory) if name.endswith(".d"))
+    paths = [os.path.join(directory, name) for name in names]
+    return [path for path in paths if os.path.isfile(path) and not os.path.islink(path)]
+
+
+def rule(targets, deps):
+    """A Ninja depfile rule; repeated dependencies are listed once."""
+    deps = list(dict.fromkeys(deps))
+    return (" ".join(escape(target) for target in targets) + ":"
+            + "".join(" \\\n\t" + escape(dep) for dep in deps) + "\n")
+
+
 def rewrite_map(text, target, root, temp_prefixes):
     """Rewrite a compiler dependency map into a Ninja rule with absolute paths."""
-    deps = dependency_paths(text, root, temp_prefixes)
-    return escape(target) + ":" + "".join(" \\\n\t" + escape(dep) for dep in deps) + "\n"
+    return rule([target], dependency_paths(text, root, temp_prefixes))
 
 
 def main(argv):
@@ -133,18 +151,27 @@ def main(argv):
         code = proc.returncode if proc.returncode >= 0 else 128 - proc.returncode
 
         if code == 0 and dep is not None:
-            found = find_map(temp, target)
-            if found is not None:
+            map_dir = os.environ.get("KZ_DEPFILE_DIR")
+            if map_dir:
+                maps = all_maps(os.path.join(root, map_dir)) + all_maps(temp)
+                targets = [line for line in target.split("\n") if line]
+            else:
+                found = find_map(temp, target)
+                maps = [found] if found is not None else []
+                targets = [target]
+            prefixes = sorted({temp, os.path.realpath(temp)}, key=len, reverse=True)
+            deps = []
+            for found in maps:
                 with open(found, encoding="utf-8", errors="replace") as f:
-                    text = f.read()
-                prefixes = sorted({temp, os.path.realpath(temp)}, key=len, reverse=True)
-                for path in dependency_paths(text, root, prefixes):
-                    if not os.path.exists(path):
-                        print("kz-mwcc-exec: dependency map names a missing file: %s "
-                              "(paths with spaces are not supported)" % path, file=sys.stderr)
-                        return 1
+                    deps.extend(dependency_paths(f.read(), root, prefixes))
+            for path in deps:
+                if not os.path.exists(path):
+                    print("kz-mwcc-exec: dependency map names a missing file: %s "
+                          "(paths with spaces are not supported)" % path, file=sys.stderr)
+                    return 1
+            if maps:
                 with open(dep, "w", encoding="utf-8") as f:
-                    f.write(rewrite_map(text, target, root, prefixes))
+                    f.write(rule(targets, deps))
         return code
     finally:
         shutil.rmtree(temp)

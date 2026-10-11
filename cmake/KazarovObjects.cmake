@@ -156,3 +156,82 @@ function(kz_mwcc_object obj src)
         COMMENT "${comment}"
         VERBATIM)
 endfunction()
+
+# kz_mwcc_batch(<outdir> SOURCES <src>... FLAGS ... [ENV N=V ...] [DEPENDS ...]
+#               [COMMENT text] [OBJECTS <var>])
+#
+# Compiles every source in one compiler run through `kz-mwcc --batch`, so the state the
+# compiler keeps between translation units carries from each into the next, as one retail
+# invocation did. The object of each source is <outdir>/<source file name>.o; OBJECTS names
+# a variable that receives them in source order. Ninja reads one depfile covering every
+# source and header, so touching any of them recompiles the whole batch.
+function(kz_mwcc_batch outdir)
+    cmake_parse_arguments(KZB "" "COMMENT;OBJECTS" "SOURCES;FLAGS;ENV;DEPENDS" ${ARGN})
+    if(KZB_UNPARSED_ARGUMENTS)
+        message(FATAL_ERROR "kz_mwcc_batch(${outdir}): unknown arguments ${KZB_UNPARSED_ARGUMENTS}")
+    endif()
+    if(NOT KZB_SOURCES)
+        message(FATAL_ERROR "kz_mwcc_batch(${outdir}) needs SOURCES")
+    endif()
+    if(NOT KZ_MWCC)
+        message(FATAL_ERROR "kz_mwcc_batch needs KZ_MWCC (the compiler)")
+    endif()
+
+    kz_absolute_path("${outdir}" outdir_abs)
+    kz_absolute_path("${KZ_MWCC}" mwcc_abs)
+    set(objs "")
+    set(srcs_abs "")
+    set(stems "")
+    foreach(src IN LISTS KZB_SOURCES)
+        kz_absolute_path("${src}" src_abs)
+        get_filename_component(name "${src}" NAME)
+        get_filename_component(stem "${src}" NAME_WE)
+        if(stem IN_LIST stems)
+            message(FATAL_ERROR "kz_mwcc_batch(${outdir}): two sources compile to ${stem}.o")
+        endif()
+        list(APPEND stems "${stem}")
+        list(APPEND objs "${outdir_abs}/${name}.o")
+        list(APPEND srcs_abs "${src_abs}")
+    endforeach()
+    list(GET objs 0 first)
+    set(depfile "${first}.d")
+
+    set(flags ${KZB_FLAGS})
+    if(NOT "-MD" IN_LIST flags)
+        list(APPEND flags -MD)
+    endif()
+
+    string(JOIN " " runner ${KZ_MWCC_RUNNER})
+    # An escaped \; keeps the MWCIncludes separator inside one shell word.
+    string(REPLACE ";" "\;" include_dirs "${KZ_LIB_INCLUDE_DIRS}")
+    kz_absolute_paths(extra ${KZB_DEPENDS})
+    list(LENGTH KZB_SOURCES count)
+    if(KZB_COMMENT)
+        set(comment "${KZB_COMMENT}")
+    else()
+        set(comment "CC ${count} units into ${outdir}")
+    endif()
+
+    file(MAKE_DIRECTORY "${outdir_abs}")
+    add_custom_command(
+        OUTPUT ${objs}
+        COMMAND ${CMAKE_COMMAND} -E env
+            PYTHONPATH=${KZ_PYTHONPATH}
+            KZ_IMAGE_ID=${KZ_IMAGE_ID}
+            KZ_MWCC=${mwcc_abs}
+            "KZ_MWCC_RUNNER=${runner}"
+            KZ_PROJECT_ROOT=${CMAKE_SOURCE_DIR}
+            "MWCIncludes=${include_dirs}"
+            ${KZB_ENV}
+            ${KZ_PYTHON} ${KZ_BIN}/kz-mwcc
+            --batch --outdir "${outdir_abs}" --depfile "${depfile}" --
+            ${flags} ${KZB_SOURCES}
+        DEPFILE "${depfile}"
+        DEPENDS ${srcs_abs} ${mwcc_abs} ${KZ_TOOL_DEPENDS} ${extra}
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        COMMENT "${comment}"
+        VERBATIM)
+    if(KZB_OBJECTS)
+        set(${KZB_OBJECTS} "${objs}" PARENT_SCOPE)
+    endif()
+endfunction()

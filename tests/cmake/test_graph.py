@@ -125,7 +125,7 @@ def test_object_commands_carry_the_image_id(tmp_path):
     build = configure(tmp_path)
     commands = [line for line in (build / "build.ninja").read_text().splitlines()
                 if line.startswith("  COMMAND = ") and ("kz-mwcc " in line or "fake_as.py" in line)]
-    assert len(commands) == 4
+    assert len(commands) == 5
     assert all("KZ_IMAGE_ID=" in line for line in commands)
 
 
@@ -183,3 +183,37 @@ def test_single_word_assembler_configures(tmp_path):
          "-P", str(ROOT / "cmake" / "KazarovToolchain.cmake")],
         capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+BATCH = "CC 2 units into %s/obj/whole"
+
+
+def test_batch_header_recompiles_the_whole_batch_once(tmp_path):
+    build = configure(tmp_path)
+    build_all(build)
+    touch(FIXTURE / "src" / "batch.h")
+    assert pending(build) == [BATCH % build]
+
+
+def test_batch_source_recompiles_the_whole_batch_once(tmp_path):
+    build = configure(tmp_path)
+    build_all(build)
+    touch(FIXTURE / "src" / "e.c")
+    assert pending(build) == [BATCH % build]
+
+
+def test_batch_writes_every_object_and_one_depfile(tmp_path):
+    build = configure(tmp_path)
+    build_all(build)
+    whole = build / "obj" / "whole"
+    assert sorted(os.listdir(whole)) == ["d.c.o", "d.c.o.d", "e.c.o"]
+    assert (whole / "d.c.o").read_text().startswith("fake object for src/d.c\n")
+    assert (whole / "e.c.o").read_text().startswith("fake object for src/e.c\n")
+    assert "no work to do" in run(["ninja", "-C", str(build), "-n"])
+
+
+def test_removing_one_batch_object_recompiles_the_batch(tmp_path):
+    build = configure(tmp_path)
+    build_all(build)
+    (build / "obj" / "whole" / "e.c.o").unlink()
+    assert pending(build) == [BATCH % build]

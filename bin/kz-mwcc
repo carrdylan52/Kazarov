@@ -1,32 +1,60 @@
 #!/usr/bin/env python3
-"""Compile one unit through kz-mwcc-exec and leave a depfile Ninja can read.
+"""Compile through kz-mwcc-exec and leave a depfile Ninja can read.
 
     kz-mwcc --obj OBJ --depfile DEP -- FLAGS... SOURCE
+    kz-mwcc --batch --outdir DIR --depfile DEP -- FLAGS... SOURCE...
 
 Run from the project root. KZ_MWCC is the compiler and KZ_MWCC_RUNNER the wibo-style runner
 (see kz-mwcc-exec). Without a dependency flag (-MD or -MMD) and without a map, the depfile is
-an empty rule for OBJ, so Ninja does not rebuild the unit forever. With one, a missing map fails.
+an empty rule for the objects, so Ninja does not rebuild them forever. With one, a missing map
+fails.
+
+--batch compiles every SOURCE in one compiler run, so state the compiler keeps between
+translation units carries from each into the next, as in a retail build. The sources are the
+trailing arguments named like C or C++ files, as the compiler itself tells them from options.
+Each object is DIR/<source file name>.o, and the one depfile names them all. No object is
+left in DIR unless every one was produced.
 """
 
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 
-USAGE = "usage: kz-mwcc --obj OBJ --depfile DEP -- FLAGS... SOURCE"
+SOURCE_SUFFIXES = (".c", ".cc", ".cp", ".cpp", ".cxx", ".c++")
+
+USAGE = ("usage: kz-mwcc --obj OBJ --depfile DEP -- FLAGS... SOURCE\n"
+         "       kz-mwcc --batch --outdir DIR --depfile DEP -- FLAGS... SOURCE...")
 
 
 def parse(argv):
     opts = {}
     i = 0
     while i < len(argv) and argv[i] != "--":
-        if argv[i] not in ("--obj", "--depfile") or i + 1 >= len(argv):
+        if argv[i] == "--batch":
+            opts["batch"] = True
+            i += 1
+            continue
+        if argv[i] not in ("--obj", "--outdir", "--depfile") or i + 1 >= len(argv):
             raise ValueError(argv[i])
         opts[argv[i][2:]] = argv[i + 1]
         i += 2
     rest = argv[i + 1:] if i < len(argv) else []
-    if "obj" not in opts or not rest:
+    if not rest:
         raise ValueError("missing arguments")
-    return opts["obj"], opts.get("depfile"), rest[:-1], rest[-1]
+    if opts.get("batch"):
+        if "outdir" not in opts or "obj" in opts:
+            raise ValueError("--batch takes --outdir")
+        count = 0
+        while count < len(rest) and rest[-1 - count].lower().endswith(SOURCE_SUFFIXES):
+            count += 1
+        if not count:
+            raise ValueError("no sources")
+        return opts, rest[:-count], rest[-count:]
+    if "obj" not in opts or "outdir" in opts:
+        raise ValueError("missing arguments")
+    return opts, rest[:-1], [rest[-1]]
 
 
 def remove(*paths):
@@ -35,9 +63,20 @@ def remove(*paths):
             os.remove(path)
 
 
+def objects_of(outdir, sources):
+    """The object of each source in a batch; two sources may not share a stem."""
+    stems = {}
+    for source in sources:
+        stem = os.path.splitext(os.path.basename(source))[0]
+        if stem in stems:
+            raise ValueError("%s and %s would both compile to %s.o" % (stems[stem], source, stem))
+        stems[stem] = source
+    return [os.path.join(outdir, os.path.basename(source) + ".o") for source in sources]
+
+
 def main(argv):
     try:
-        obj, dep, flags, source = parse(argv[1:])
+        opts, flags, sources = parse(argv[1:])
     except ValueError:
         print(USAGE, file=sys.stderr)
         return 2
@@ -46,42 +85,71 @@ def main(argv):
         print("kz-mwcc: KZ_MWCC is not set", file=sys.stderr)
         return 2
 
+    batch = opts.get("batch", False)
     root = os.getcwd()
-    obj = os.path.abspath(obj)
+    if batch:
+        outdir = os.path.abspath(opts["outdir"])
+        try:
+            objs = objects_of(outdir, sources)
+        except ValueError as error:
+            print("kz-mwcc: %s" % error, file=sys.stderr)
+            return 2
+    else:
+        objs = [os.path.abspath(opts["obj"])]
+    dep = opts.get("depfile")
     dep_tmp = None
     env = dict(os.environ, KZ_PROJECT_ROOT=root)
+    env.pop("KZ_DEPFILE_DIR", None)
     if dep is not None:
         dep = os.path.abspath(dep)
         dep_tmp = dep + ".tmp"
-        env.update(KZ_DEPFILE=dep_tmp, KZ_DEPFILE_TARGET=obj)
+        env.update(KZ_DEPFILE=dep_tmp, KZ_DEPFILE_TARGET="\n".join(objs))
 
-    remove(obj, dep, dep_tmp)
-    for path in (obj, dep):
+    remove(*objs, dep, dep_tmp)
+    for path in (*objs, dep):
         if path is not None:
             os.makedirs(os.path.dirname(path), exist_ok=True)
 
     here = os.path.dirname(os.path.realpath(__file__))
-    code = subprocess.call([os.path.join(here, "kz-mwcc-exec"), compiler,
-                            "-c", *flags, "-o", obj, source], env=env)
+    exec_ = os.path.join(here, "kz-mwcc-exec")
+    if not batch:
+        code = subprocess.call([exec_, compiler, "-c", *flags, "-o", objs[0], *sources], env=env)
+    else:
+        # The compiler names each object after its source's stem and writes the maps beside
+        # them, so it writes into a private directory and the objects are renamed from there.
+        staging = tempfile.mkdtemp(prefix=".kz-batch.", dir=outdir)
+        env["KZ_DEPFILE_DIR"] = staging
+        try:
+            code = subprocess.call([exec_, compiler, "-c", *flags, "-o", staging, *sources],
+                                   env=env)
+            made = [os.path.join(staging, os.path.splitext(os.path.basename(source))[0] + ".o")
+                    for source in sources]
+            if code == 0 and all(os.path.isfile(path) and os.path.getsize(path) for path in made):
+                for path, obj in zip(made, objs):
+                    os.replace(path, obj)
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
     if code != 0:
         remove(dep_tmp)
         return code
 
-    if not os.path.isfile(obj) or os.path.getsize(obj) == 0:
-        remove(obj, dep_tmp)
-        print("kz-mwcc: no output at %s" % obj, file=sys.stderr)
+    missing = [obj for obj in objs if not os.path.isfile(obj) or os.path.getsize(obj) == 0]
+    if missing:
+        remove(*objs, dep_tmp)
+        print("kz-mwcc: no output at %s" % missing[0], file=sys.stderr)
         return 1
 
     if dep is not None:
         if os.path.isfile(dep_tmp):
             os.replace(dep_tmp, dep)
         elif any(flag in ("-MD", "-MMD") for flag in flags):
-            remove(obj)
-            print("kz-mwcc: the compiler wrote no dependency map for %s" % obj, file=sys.stderr)
+            remove(*objs)
+            print("kz-mwcc: the compiler wrote no dependency map for %s" % objs[0],
+                  file=sys.stderr)
             return 1
         else:
             with open(dep, "w", encoding="utf-8") as f:
-                f.write("%s:\n" % obj)
+                f.write("%s:\n" % " ".join(objs))
     return 0
 
 
