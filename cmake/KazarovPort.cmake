@@ -1,25 +1,38 @@
 # Rules for a game's host port: the shared port library under port/.
 #
 # Include from the port's CMakeLists.txt once C++ is enabled and SDL3, Vulkan and
-# nlohmann_json are found. Generated headers go to ${CMAKE_BINARY_DIR}/generated.
+# nlohmann_json are found. Each kz_port_library target's generated headers go to
+# ${CMAKE_BINARY_DIR}/generated/<target>, which is on its public include path.
 
 get_filename_component(KZ_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
 
-# kz_port_shaders(<out_var> DIRS <dir>...)
+# kz_port_shaders(<out_var> OUT <dir> DIRS <dir>...)
 #
-# Every *.vert and *.frag in DIRS becomes generated/shaders/<file>.spv.hpp, its SPIR-V as a
-# const uint32_t array named after the file (draw.frag -> draw_frag). <out_var> receives the headers.
+# Every *.vert and *.frag in DIRS becomes <OUT>/<file>.spv.hpp, its SPIR-V as a const uint32_t
+# array named after the file (draw.frag -> draw_frag). Two shaders of one name are an error, since
+# one would overwrite the other. <out_var> receives the headers.
 function(kz_port_shaders out_var)
-    cmake_parse_arguments(PARSE_ARGV 1 arg "" "" "DIRS")
+    cmake_parse_arguments(PARSE_ARGV 1 arg "" "OUT" "DIRS")
+    if(NOT DEFINED arg_OUT)
+        message(FATAL_ERROR "kz_port_shaders needs OUT")
+    endif()
     find_program(GLSLANG_VALIDATOR NAMES glslangValidator REQUIRED)
-    set(header_dir ${CMAKE_BINARY_DIR}/generated/shaders)
     set(headers "")
+    set(names "")
+    set(shader_sources "")
     foreach(dir IN LISTS arg_DIRS)
         file(GLOB shaders CONFIGURE_DEPENDS ${dir}/*.vert ${dir}/*.frag)
         foreach(shader IN LISTS shaders)
             get_filename_component(shader_name ${shader} NAME)
+            list(FIND names ${shader_name} earlier)
+            if(NOT earlier EQUAL -1)
+                list(GET shader_sources ${earlier} first)
+                message(FATAL_ERROR "kz_port_shaders: ${shader} and ${first} would both be ${arg_OUT}/${shader_name}.spv.hpp")
+            endif()
+            list(APPEND names ${shader_name})
+            list(APPEND shader_sources ${shader})
             string(REPLACE "." "_" shader_symbol ${shader_name})
-            set(header ${header_dir}/${shader_name}.spv.hpp)
+            set(header ${arg_OUT}/${shader_name}.spv.hpp)
             add_custom_command(OUTPUT ${header}
                 COMMAND ${GLSLANG_VALIDATOR} -V --target-env vulkan1.4 --quiet --vn ${shader_symbol}
                     --depfile ${header}.d -o ${header} ${shader}
@@ -82,8 +95,9 @@ endfunction()
 # game accepts in the loader and the device, ICON the window icon as raw square RGBA pixels.
 # APP_IDENTIFIER names the game to the desktop (APP_ID if not given). PROJECT_LABEL and PROJECT_URL
 # are the Discord presence's button, DISCORD_* its application and small image; without
-# DISCORD_CLIENT_ID there is no presence. They reach the code as generated/app/app_info.hpp and
-# generated/app/icon.hpp. SHADER_DIRS adds the game's own shaders to the renderer's.
+# DISCORD_CLIENT_ID there is no presence. They reach the code as "app/app_info.hpp" and
+# "app/icon.hpp", under generated/<target>. SHADER_DIRS adds the game's own shaders to the
+# renderer's; a game shader may not share a renderer shader's file name.
 # THIRD_PARTY_DIRS are where kz_port_third_party looks before it downloads.
 function(kz_port_library target)
     set(strings APP_NAME APP_ID APP_IDENTIFIER ENV_PREFIX PROJECT_LABEL PROJECT_URL DISCORD_CLIENT_ID
@@ -105,7 +119,7 @@ function(kz_port_library target)
     # VK_MAKE_API_VERSION(0, 1, minor, 0), so the header needs no Vulkan include.
     math(EXPR min_vulkan_version "(1 << 22) | (${CMAKE_MATCH_1} << 12)" OUTPUT_FORMAT HEXADECIMAL)
 
-    set(generated ${CMAKE_BINARY_DIR}/generated)
+    set(generated ${CMAKE_BINARY_DIR}/generated/${target})
     foreach(name IN LISTS strings)
         string(REPLACE "\\" "\\\\" escaped "${arg_${name}}")
         string(REPLACE "\"" "\\\"" escaped "${escaped}")
@@ -147,7 +161,7 @@ inline constexpr const char *kDiscordImageText = ${DISCORD_IMAGE_TEXT_LITERAL};
     file(CONFIGURE OUTPUT ${generated}/app/icon.hpp
         CONTENT "#pragma once\n\n#include <cstdint>\n\nnamespace app {\ninline constexpr int kIconSize = ${icon_size};\ninline constexpr std::uint8_t kIconRgba[] = {${icon_data}};\n} // namespace app\n")
 
-    kz_port_shaders(shader_headers DIRS ${KZ_ROOT}/port/gfx/shaders ${arg_SHADER_DIRS})
+    kz_port_shaders(shader_headers OUT ${generated}/shaders DIRS ${KZ_ROOT}/port/gfx/shaders ${arg_SHADER_DIRS})
     file(GLOB_RECURSE sources CONFIGURE_DEPENDS ${KZ_ROOT}/port/gfx/*.cpp ${KZ_ROOT}/port/platform/*.cpp
         ${KZ_ROOT}/port/audio/*.cpp)
     file(GLOB_RECURSE game_math CONFIGURE_DEPENDS ${KZ_ROOT}/port/sce_core/*.cpp
