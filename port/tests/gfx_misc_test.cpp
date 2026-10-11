@@ -5,6 +5,7 @@
 #include <iterator>
 #include <string>
 
+#include "gfx/requirements.hpp"
 #include "gfx_fixture.hpp"
 
 using namespace dc::test;
@@ -116,6 +117,33 @@ TEST(GfxMisc, NoLatePipelines) {
         gfx::DestroyTexture(palette);
     }
     std::filesystem::remove(cache);
+}
+
+TEST(GfxMisc, MinApiVersion) {
+    gfx::detail::DeviceCaps caps;
+    caps.api_version = VK_MAKE_API_VERSION(0, 1, 3, 280);
+    caps.features.dualSrcBlend = VK_TRUE;
+    caps.features.shaderClipDistance = VK_TRUE;
+    caps.features.shaderSampledImageArrayDynamicIndexing = VK_TRUE;
+    caps.features12.descriptorBindingPartiallyBound = VK_TRUE;
+    caps.features12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
+    caps.features12.descriptorBindingUpdateUnusedWhilePending = VK_TRUE;
+    caps.features13.dynamicRendering = VK_TRUE;
+    caps.features13.synchronization2 = VK_TRUE;
+    caps.properties12.maxPerStageDescriptorUpdateAfterBindSampledImages = UINT32_MAX;
+    caps.properties12.maxDescriptorSetUpdateAfterBindSampledImages = UINT32_MAX;
+    caps.properties12.maxPerStageUpdateAfterBindResources = UINT32_MAX;
+    caps.limits.maxPushConstantsSize = UINT32_MAX;
+    caps.depth_stencil_format = true;
+    caps.graphics_queue = true;
+
+    EXPECT_TRUE(gfx::detail::MissingRequirements(caps, true, VK_API_VERSION_1_3).empty());
+    std::vector<std::string> missing = gfx::detail::MissingRequirements(caps, true, VK_API_VERSION_1_4);
+    ASSERT_EQ(missing.size(), 1u);
+    EXPECT_EQ(missing[0], "Vulkan 1.4 (it has 1.3)");
+
+    caps.api_version = VK_MAKE_API_VERSION(0, 1, 4, 305);
+    EXPECT_TRUE(gfx::detail::MissingRequirements(caps, true, VK_API_VERSION_1_4).empty());
 }
 
 TEST(GfxMisc, TextureLimits) {
