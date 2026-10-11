@@ -164,3 +164,31 @@ inline constexpr const char *kDiscordImageText = ${DISCORD_IMAGE_TEXT_LITERAL};
     target_compile_definitions(${target} PUBLIC ${arg_DEFINES})
     target_compile_options(${target} PRIVATE -Wall -ffunction-sections -fdata-sections)
 endfunction()
+
+# kz_port_stubs(HEADERS <game sce dir> SYMBOLS <ledger.tsv> OUT <dir> OUT_SOURCES <var>)
+#
+# The asserting definitions of the ledger's `stub` rows (scripts/gen_sce_stubs.py), written at
+# configure time and again whenever the ledger or a header changes. They expect PS2_UNIMPLEMENTED
+# from what the game's units are compiled with. <var> receives the sources.
+function(kz_port_stubs)
+    cmake_parse_arguments(PARSE_ARGV 0 arg "" "HEADERS;SYMBOLS;OUT;OUT_SOURCES" "")
+    foreach(required HEADERS SYMBOLS OUT OUT_SOURCES)
+        if(NOT DEFINED arg_${required})
+            message(FATAL_ERROR "kz_port_stubs needs ${required}")
+        endif()
+    endforeach()
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    set(script ${KZ_ROOT}/scripts/gen_sce_stubs.py)
+    file(GLOB headers CONFIGURE_DEPENDS ${arg_HEADERS}/*.h)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${script} ${arg_SYMBOLS} ${headers})
+    execute_process(
+        COMMAND ${Python3_EXECUTABLE} ${script} --ledger ${arg_SYMBOLS} --headers ${arg_HEADERS} --out ${arg_OUT}
+        OUTPUT_VARIABLE sources
+        RESULT_VARIABLE result
+        OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(NOT result EQUAL 0)
+        message(FATAL_ERROR "gen_sce_stubs.py failed for ${arg_SYMBOLS}")
+    endif()
+    string(REPLACE "\n" ";" sources "${sources}")
+    set(${arg_OUT_SOURCES} ${sources} PARENT_SCOPE)
+endfunction()
