@@ -137,7 +137,8 @@ class ConfigStore {
 public:
     virtual ~ConfigStore() = default;
     virtual const ConfigBase &Current() const = 0;
-    // config is a copy of Current(), changed: the game's own type.
+    // config is a copy of Current(), changed. Of the game's own type, it replaces everything; any
+    // other ConfigBase replaces the host's part only, as ChangeHost.
     virtual bool Change(const ConfigBase &config) = 0;
     // The current settings with the host's part replaced by host's.
     virtual bool ChangeHost(const ConfigBase &host) = 0;

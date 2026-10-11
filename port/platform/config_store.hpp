@@ -107,7 +107,13 @@ public:
         return saved_;
     }
 
-    bool Change(const ConfigBase &config) override { return Change(dynamic_cast<const Config &>(config)); }
+    // A ConfigBase that is not the game's Config is the host's part alone.
+    bool Change(const ConfigBase &config) override {
+        if (const Config *game = dynamic_cast<const Config *>(&config)) {
+            return Change(*game);
+        }
+        return ChangeHost(config);
+    }
 
     bool ChangeHost(const ConfigBase &host) override {
         Config config = config_;

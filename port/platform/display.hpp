@@ -42,7 +42,7 @@ WindowConfig DisplayWindowConfig(const ConfigBase &config);
 // nothing of the window, whatever the overrides make of its fields.
 void DisplayChanged(const ConfigBase &before, const ConfigBase &after);
 
-// ConfigBaseChange(config), then the display fields made the window's mode where the window did not
+// ConfigBaseChange(config) (a plain ConfigBase changes the host's part only), then the display fields made the window's mode where the window did not
 // take the one asked for. Returns whether the settings are saved.
 bool DisplayApply(const ConfigBase &config);
 
