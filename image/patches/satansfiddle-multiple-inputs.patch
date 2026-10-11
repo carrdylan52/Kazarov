@@ -1,0 +1,318 @@
+diff --git a/README.md b/README.md
+index c1758ba..6bb6ee7 100644
+--- a/README.md
++++ b/README.md
+@@ -31,7 +31,10 @@ included in the executable's rpath; LLDB's server and any additional library
+ dependencies must also be available. `LLDB_DEBUGSERVER_PATH` can select
+ `lldb-server` when it is not in LLDB's normal installation location.
+ 
+-Every CLI invocation performs one compilation. `--translation-unit NAME` can
++Every CLI invocation runs the compiler once. Several inputs share that run, as
++in a whole-program build: `--output` then names an existing directory, which
++receives `<stem>.o` for each input, and any `<stem>.d` dependency map the compiler wrote, once all of them are complete, and the inputs
++need distinct stems. `--translation-unit NAME` (one input only) can
+ provide the original source basename when a build adapter compiles generated
+ temporary input; it controls helper-mask and floating-point selector lookup.
+ The in-process configuration and compiler profile are initialized once; callers of `compile()` should use a
+diff --git a/src/main.rs b/src/main.rs
+index d7ad374..24ef218 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -22,11 +22,13 @@ struct Args {
+     #[arg(short, long, value_name = "config")]
+     config: PathBuf,
+ 
+-    /// C++ source file to compile
+-    #[arg(value_name = "input")]
+-    input: PathBuf,
++    /// C++ source files to compile. Several share one compiler process, so state the
++    /// compiler keeps between translation units carries from each into the next.
++    #[arg(value_name = "input", required = true, num_args = 1..)]
++    input: Vec<PathBuf>,
+ 
+-    /// Object file to write
++    /// Object file to write; with several inputs, the directory that receives <stem>.o
++    /// for each
+     #[arg(short, long, value_name = "output")]
+     output: PathBuf,
+ 
+@@ -106,10 +108,70 @@ impl Drop for PendingObject {
+     }
+ }
+ 
++/// Publish the objects of a multi-input run only after every one of them is complete.
++struct PendingDirectory(PathBuf);
++
++impl PendingDirectory {
++    fn new(output: &Path) -> Result<Self> {
++        for serial in 0..100 {
++            let candidate =
++                path::absolute(output)?.join(format!(".satansfiddle-{}-{serial}", std::process::id()));
++            match fs::create_dir(&candidate) {
++                Ok(()) => return Ok(Self(candidate)),
++                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
++                Err(error) => return Err(error).context("cannot create a temporary output directory"),
++            }
++        }
++        bail!("cannot allocate a temporary output directory")
++    }
++
++    fn publish(&self, stems: &[String], output: &Path) -> Result<()> {
++        for stem in stems {
++            let mut magic = [0; 4];
++            fs::File::open(self.0.join(format!("{stem}.o")))
++                .and_then(|mut file| file.read_exact(&mut magic))
++                .with_context(|| format!("compiler succeeded without producing {stem}.o"))?;
++            ensure!(&magic == b"\x7fELF", "compiler output {stem}.o is not an ELF object");
++        }
++        // A dependency map the compiler wrote beside an object goes with it.
++        for stem in stems {
++            for name in [format!("{stem}.o"), format!("{stem}.d")] {
++                let made = self.0.join(&name);
++                if name.ends_with(".d") && !made.is_file() {
++                    continue;
++                }
++                fs::rename(made, output.join(&name))
++                    .with_context(|| format!("cannot publish {name} to {}", output.display()))?;
++            }
++        }
++        Ok(())
++    }
++}
++
++impl Drop for PendingDirectory {
++    fn drop(&mut self) {
++        let _ = fs::remove_dir_all(&self.0);
++    }
++}
++
++/// The object stem of each input; MWCC names a directory output's objects by stem.
++fn input_stems(input: &[PathBuf]) -> Result<Vec<String>> {
++    let mut stems = Vec::with_capacity(input.len());
++    for one in input {
++        let stem = one
++            .file_stem()
++            .and_then(|stem| stem.to_str())
++            .with_context(|| format!("input {} has no UTF-8 file stem", one.display()))?;
++        ensure!(!stems.iter().any(|seen| seen == stem), "two inputs share the object name {stem}.o");
++        stems.push(stem.to_owned());
++    }
++    Ok(stems)
++}
++
+ fn main() {
+     let args = Args::parse();
+     if let Err(error) = compile(
+-        &args.input,
++        &args.input[..],
+         &args.output,
+         &args.config,
+         args.translation_unit.as_deref(),
+@@ -120,17 +182,34 @@ fn main() {
+ }
+ 
+ pub fn compile(
+-    input: &Path,
++    input: &[PathBuf],
+     output: &Path,
+     config: &Path,
+     translation_unit: Option<&str>,
+ ) -> Result<()> {
++    ensure!(!input.is_empty(), "no input to compile");
++    let stems = if input.len() == 1 {
++        Vec::new()
++    } else {
++        ensure!(translation_unit.is_none(), "--translation-unit names a single input");
++        ensure!(output.is_dir(), "with several inputs, {} must be a directory", output.display());
++        input_stems(input)?
++    };
+     config::initialize(config)?;
+     config::set_translation_unit(translation_unit)?;
+     hooks::load_compiler(&config::compiler_path())?;
+     let wibo_path = config::wibo_path()?;
+-    let pending = PendingObject::new(output)?;
+-    let launch_info = configure_launch(input, &pending.0)?;
++    let (single, several) = if stems.is_empty() {
++        (Some(PendingObject::new(output)?), None)
++    } else {
++        (None, Some(PendingDirectory::new(output)?))
++    };
++    let compiler_output = match (&single, &several) {
++        (Some(object), _) => &object.0,
++        (_, Some(directory)) => &directory.0,
++        _ => unreachable!(),
++    };
++    let launch_info = configure_launch(input, compiler_output)?;
+ 
+     let session = DebuggerSession::new();
+     let target = session
+@@ -217,7 +296,11 @@ pub fn compile(
+         process.exit_status()
+     );
+     hooks::check_complete()?;
+-    pending.publish(output)
++    match (single, several) {
++        (Some(object), _) => object.publish(output),
++        (_, Some(directory)) => directory.publish(&stems, &path::absolute(output)?),
++        _ => unreachable!(),
++    }
+ }
+ 
+ fn drain_output(process: &SBProcess) -> Result<()> {
+@@ -243,16 +326,20 @@ fn drain_output(process: &SBProcess) -> Result<()> {
+     Ok(())
+ }
+ 
+-fn configure_launch(input: &Path, output: &Path) -> Result<SBLaunchInfo> {
++fn configure_launch(input: &[PathBuf], output: &Path) -> Result<SBLaunchInfo> {
+     let compiler_path = config::compiler_path();
+     let compiler_path = compiler_path
+         .to_str()
+         .context("compiler path is not UTF-8")?;
+     let compiler_options = config::compiler_options()?;
+     let output_path = path::absolute(output)?;
+-    let input_path =
+-        fs::canonicalize(input).with_context(|| format!("cannot open {}", input.display()))?;
+-    let mut arguments = Vec::with_capacity(compiler_options.len() + 4);
++    let mut input_paths = Vec::with_capacity(input.len());
++    for one in input {
++        let one_path =
++            fs::canonicalize(one).with_context(|| format!("cannot open {}", one.display()))?;
++        input_paths.push(one_path.to_str().context("input path is not UTF-8")?.to_owned());
++    }
++    let mut arguments = Vec::with_capacity(compiler_options.len() + 3 + input.len());
+     arguments.push(compiler_path.to_owned());
+     arguments.extend(compiler_options);
+     arguments.extend([
+@@ -261,11 +348,8 @@ fn configure_launch(input: &Path, output: &Path) -> Result<SBLaunchInfo> {
+             .to_str()
+             .context("output path is not UTF-8")?
+             .to_owned(),
+-        input_path
+-            .to_str()
+-            .context("input path is not UTF-8")?
+-            .to_owned(),
+     ]);
++    arguments.extend(input_paths);
+     ensure!(
+         arguments.iter().all(|arg| !arg.contains('\0')),
+         "compiler arguments contain a NUL byte"
+diff --git a/tests/compiler_cli.rs b/tests/compiler_cli.rs
+index ad48195..7c93f1e 100644
+--- a/tests/compiler_cli.rs
++++ b/tests/compiler_cli.rs
+@@ -42,6 +42,19 @@ fn cli_command(input: &Path, output: &Path, config: &Path) -> Command {
+     command
+ }
+ 
++fn cli_many(inputs: &[&Path], output: &Path, config: &Path) -> Output {
++    let executable = env::var_os("SATANSFIDDLE_TEST_EXECUTABLE")
++        .unwrap_or_else(|| env!("CARGO_BIN_EXE_satansfiddle").into());
++    Command::new(executable)
++        .arg("--config")
++        .arg(config)
++        .arg("--output")
++        .arg(output)
++        .args(inputs)
++        .output()
++        .expect("could not launch satansfiddle")
++}
++
+ fn cli(input: &Path, output: &Path, config: &Path) -> Output {
+     cli_command(input, output, config)
+         .output()
+@@ -408,6 +421,94 @@ fn unknown_compiler_is_rejected() {
+     );
+ }
+ 
++#[test]
++fn several_inputs_need_a_directory_distinct_stems_and_no_unit_name() {
++    let work = Workspace::new();
++    let config = work.0.join("config.json");
++    fs::write(&config, "{\"compiler_path\": \"/nonexistent/mwccps2.exe\"}").unwrap();
++    let first = work.0.join("first.cpp");
++    let second = work.0.join("second.cpp");
++    let nested = work.0.join("nested");
++    fs::create_dir(&nested).unwrap();
++    let same_stem = nested.join("first.cpp");
++    for path in [&first, &second, &same_stem] {
++        fs::write(path, "int value() { return 1; }\n").unwrap();
++    }
++    let reject = |result: Output, diagnostic: &str| {
++        assert!(!result.status.success());
++        let stderr = String::from_utf8_lossy(&result.stderr);
++        assert!(stderr.contains(diagnostic), "expected {diagnostic:?}: {stderr}");
++    };
++    reject(cli_many(&[&first, &second], &work.0.join("one.o"), &config), "must be a directory");
++    reject(cli_many(&[&first, &same_stem], &work.0, &config), "share the object name first.o");
++    let executable = env::var_os("SATANSFIDDLE_TEST_EXECUTABLE")
++        .unwrap_or_else(|| env!("CARGO_BIN_EXE_satansfiddle").into());
++    reject(
++        Command::new(executable)
++            .arg("--config").arg(&config)
++            .arg("--output").arg(&work.0)
++            .args(["--translation-unit", "first.cpp"])
++            .arg(&first).arg(&second)
++            .output().unwrap(),
++        "--translation-unit names a single input",
++    );
++    assert!(!work.0.join("first.o").exists() && !work.0.join("second.o").exists());
++}
++
++#[test]
++#[ignore = "requires SATANSFIDDLE_TEST_COMPILER_300 plus debug-symbol wibo"]
++fn real_several_inputs_match_their_single_runs() {
++    let compiler = PathBuf::from(env::var_os("SATANSFIDDLE_TEST_COMPILER_300").unwrap());
++    let work = Workspace::new();
++    let config = work.0.join("config.json");
++    fs::write(&config, compiler_config(&compiler, "")).unwrap();
++    let first = work.0.join("floating.cpp");
++    let second = work.0.join("again.cpp");
++    let third = work.0.join("integer.cpp");
++    fs::write(&first, include_str!("floating/floating.cpp")).unwrap();
++    fs::write(&second, include_str!("floating/floating.cpp")).unwrap();
++    fs::write(&third, include_str!("compile_sample/sample.cpp")).unwrap();
++    let together = work.0.join("together");
++    fs::create_dir(&together).unwrap();
++    assert_success(&cli_many(&[&first, &second, &third], &together, &config));
++    // The default masks are written at every unit, so one run reproduces each single run.
++    for input in [&first, &second, &third] {
++        let stem = input.file_stem().unwrap().to_str().unwrap();
++        let alone = work.0.join(format!("{stem}-alone.o"));
++        assert_success(&cli(input, &alone, &config));
++        assert_eq!(
++            fs::read(together.join(format!("{stem}.o"))).unwrap(),
++            fs::read(&alone).unwrap(),
++            "{stem}.o differs between one run and its own run"
++        );
++    }
++    assert!(fs::read_dir(&together).unwrap().all(|entry| !entry.unwrap().file_name()
++        .to_string_lossy().starts_with(".satansfiddle-")));
++
++    // Dependency maps the compiler writes beside the objects are published with them.
++    let flags = serde_json::from_str::<serde_json::Value>(&fs::read_to_string(&config).unwrap())
++        .unwrap()["compiler_options"].as_str().unwrap().to_owned() + " -MD";
++    let mut with_maps: serde_json::Value =
++        serde_json::from_str(&fs::read_to_string(&config).unwrap()).unwrap();
++    with_maps["compiler_options"] = flags.into();
++    fs::write(&config, with_maps.to_string()).unwrap();
++    let mapped = work.0.join("mapped");
++    fs::create_dir(&mapped).unwrap();
++    assert_success(&cli_many(&[&first, &third], &mapped, &config));
++    for stem in ["floating", "integer"] {
++        let map = fs::read_to_string(mapped.join(format!("{stem}.d"))).unwrap();
++        assert!(map.contains(&format!("{stem}.cpp")), "{stem}.d: {map}");
++    }
++
++    // A failing input publishes none of the run's objects.
++    let failed = work.0.join("failed");
++    fs::create_dir(&failed).unwrap();
++    let bad = work.0.join("invalid.cpp");
++    fs::write(&bad, "this is invalid C++ !\n").unwrap();
++    assert!(!cli_many(&[&first, &bad], &failed, &config).status.success());
++    assert_eq!(fs::read_dir(&failed).unwrap().count(), 0);
++}
++
+ /// Requires both genuine compiler executables; explicitly ignored in generic CI.
+ #[test]
+ #[ignore = "requires SATANSFIDDLE_TEST_COMPILER_233 and SATANSFIDDLE_TEST_COMPILER_300 plus debug-symbol wibo"]

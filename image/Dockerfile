@@ -33,6 +33,12 @@ RUN git apply --check /tmp/satansfiddle-placement-new.patch \
 COPY patches/satansfiddle-external-constructors.patch /tmp/satansfiddle-external-constructors.patch
 RUN git apply --check /tmp/satansfiddle-external-constructors.patch \
     && git apply /tmp/satansfiddle-external-constructors.patch
+COPY patches/satansfiddle-multiple-inputs.patch /tmp/satansfiddle-multiple-inputs.patch
+RUN git apply --check /tmp/satansfiddle-multiple-inputs.patch \
+    && git apply /tmp/satansfiddle-multiple-inputs.patch
+COPY patches/satansfiddle-inherited-helper-masks.patch /tmp/satansfiddle-inherited-helper-masks.patch
+RUN git apply --check /tmp/satansfiddle-inherited-helper-masks.patch \
+    && git apply /tmp/satansfiddle-inherited-helper-masks.patch
 # Rust 1.85 can place native libraries before the LLDB C++ archive, so the
 # stage-local flags supply the trailing libraries to the CLI, the test runners
 # and the dependency build scripts.

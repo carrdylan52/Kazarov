@@ -179,7 +179,7 @@ Built locally from `image/` only, with `docker build --platform linux/amd64 --bu
 - Base: `debian:trixie-slim`, `linux/amd64` only, because wibo needs an x86_64 kernel.
 - Contents:
   - wibo, pinned by digest. Runs the Metrowerks compiler and linker.
-  - SatansFiddle, built from source at a pinned revision with four patches from `image/patches/`. Its tests are in `/usr/local/libexec/satansfiddle-tests/`.
+  - SatansFiddle, built from source at a pinned revision with six patches from `image/patches/` (the last two let one run compile several sources and carry the helper masks between them). Its tests are in `/usr/local/libexec/satansfiddle-tests/`.
   - binutils-mips-ps2-decompals v0.10 in `/usr/local/binutils-mips-ps2-decompals`.
   - clang, lld and llvm 23 from apt.llvm.org; clangd 22.1.6; objdiff-cli v3.7.3.
   - `/opt/venv` with pycdlib, splat64[mips], libclang, graphviz, toml and levenshtein.

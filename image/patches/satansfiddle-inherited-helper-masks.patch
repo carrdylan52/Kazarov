@@ -1,0 +1,185 @@
+diff --git a/README.md b/README.md
+index 6bb6ee7..4464c60 100644
+--- a/README.md
++++ b/README.md
+@@ -63,6 +63,7 @@ are errors.
+ | `wibo_path` | `WIBO_PATH`, then `PATH` | Debug-symbol `wibo` executable. |
+ | `default_gpr_helper_mask` | `0` | Initial GPR helper history for each translation unit. |
+ | `default_fpr_helper_mask` | `0` | Initial FPR helper history for each translation unit. |
++| `inherit_helper_masks` | `false` | Leave units without a `translation_units` row to the masks the previous unit of the same run left; the defaults must stay `0`. |
+ | `translation_units` | Empty | Per-file `name`, `gpr_helper_mask`, `fpr_helper_mask` overrides. |
+ | `floating_point.default_evaluate_first` | `false` | Deterministic float-constant argument annotation. |
+ | `floating_point.default_literal_reload` | `true` | Conservatively reload pooled literals across unknown-address stores. |
+@@ -98,7 +99,9 @@ read by compiler helpers such as double arithmetic and floating conversions.
+ The masks survive translation-unit boundaries in a whole-program invocation.
+ Compiling a file alone can therefore allocate registers differently. The tool
+ seeds the masks at translation-unit entry; subsequent helper calls accumulate
+-history normally. These are helper argument masks, not general register
++history normally. With `inherit_helper_masks`, a multi-input run seeds only the
++units that have a row and lets the others carry the history from the unit
++before, as one retail invocation did. These are helper argument masks, not general register
+ reservation masks or ordinary function-call masks.
+ 
+ **Float constant evaluation order.** The float-constant annotation path copies
+diff --git a/src/config.rs b/src/config.rs
+index fff8679..5096752 100644
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -14,6 +14,8 @@ struct Config {
+     #[serde(default)]
+     default_fpr_helper_mask: u32,
+     #[serde(default)]
++    inherit_helper_masks: bool,
++    #[serde(default)]
+     translation_units: Vec<TUConfig>,
+     #[serde(default)]
+     floating_point: FloatingPointConfig,
+@@ -254,6 +256,11 @@ impl Config {
+         }
+         shlex::split(config.compiler_options.as_deref().unwrap_or_default())
+             .context("Invalid shell quoting in compiler_options")?;
++        ensure!(
++            !config.inherit_helper_masks
++                || (config.default_gpr_helper_mask == 0 && config.default_fpr_helper_mask == 0),
++            "inherit_helper_masks leaves units without a row unseeded; remove the default helper masks"
++        );
+         let mut tus = HashSet::new();
+         for tu in &mut config.translation_units {
+             tu.name = translation_unit_name(&tu.name).to_owned();
+@@ -446,22 +453,19 @@ pub fn wibo_path() -> io::Result<&'static path::Path> {
+     Ok(WIBO_PATH.get().expect("wibo path was not cached"))
+ }
+ 
+-pub fn gpr_helper_mask(tu_name: &str) -> u32 {
+-    let config = get();
+-    config
+-        .translation_units
+-        .iter()
+-        .find(|tu| tu.name == translation_unit_name(tu_name))
+-        .map_or(config.default_gpr_helper_mask, |tu| tu.gpr_helper_mask)
+-}
+-
+-pub fn fpr_helper_mask(tu_name: &str) -> u32 {
++/// The GPR and FPR helper masks to seed at a unit's entry, or None to keep the
++/// compiler's own, inherited from the previous unit of the same run.
++pub fn helper_masks(tu_name: &str) -> Option<(u32, u32)> {
+     let config = get();
+-    config
++    match config
+         .translation_units
+         .iter()
+         .find(|tu| tu.name == translation_unit_name(tu_name))
+-        .map_or(config.default_fpr_helper_mask, |tu| tu.fpr_helper_mask)
++    {
++        Some(tu) => Some((tu.gpr_helper_mask, tu.fpr_helper_mask)),
++        None if config.inherit_helper_masks => None,
++        None => Some((config.default_gpr_helper_mask, config.default_fpr_helper_mask)),
++    }
+ }
+ 
+ fn get() -> &'static Config {
+diff --git a/src/hooks.rs b/src/hooks.rs
+index 6ffe874..285888c 100644
+--- a/src/hooks.rs
++++ b/src/hooks.rs
+@@ -677,16 +677,16 @@ fn apply(process: &SBProcess, thread: &SBThread) -> Result<()> {
+         s.control_function = None;
+         s.current_statement = 0;
+         s.control_contexts.clear();
+-        write(
+-            process,
+-            c.helper_masks[0],
+-            &config::gpr_helper_mask(&s.unit).to_le_bytes(),
+-        )?;
+-        write(
+-            process,
+-            c.helper_masks[1],
+-            &config::fpr_helper_mask(&s.unit).to_le_bytes(),
+-        )?;
++        let seeded = config::helper_masks(&s.unit);
++        if let Some((gpr, fpr)) = seeded {
++            write(process, c.helper_masks[0], &gpr.to_le_bytes())?;
++            write(process, c.helper_masks[1], &fpr.to_le_bytes())?;
++        }
++        if std::env::var_os("SATANSFIDDLE_VERIFY").is_some() {
++            eprintln!("satansfiddle: helper-masks {} gpr={:#x} fpr={:#x} {}", s.unit,
++                u32_at(process, c.helper_masks[0])?, u32_at(process, c.helper_masks[1])?,
++                if seeded.is_some() { "seeded" } else { "inherited" });
++        }
+     } else if pc == c.annotation {
+         let node = reg(&frame, c.annotation_node_register)? as u64;
+         let rows = &config::floating_point().expression_overrides;
+diff --git a/tests/compiler_cli.rs b/tests/compiler_cli.rs
+index 7c93f1e..d1b7193 100644
+--- a/tests/compiler_cli.rs
++++ b/tests/compiler_cli.rs
+@@ -509,6 +509,49 @@ fn real_several_inputs_match_their_single_runs() {
+     assert_eq!(fs::read_dir(&failed).unwrap().count(), 0);
+ }
+ 
++#[test]
++#[ignore = "requires SATANSFIDDLE_TEST_COMPILER_300 plus debug-symbol wibo"]
++fn real_inherited_helper_masks_carry_into_the_next_unit() {
++    let compiler = PathBuf::from(env::var_os("SATANSFIDDLE_TEST_COMPILER_300").unwrap());
++    let work = Workspace::new();
++    let config = work.0.join("config.json");
++    let first = work.0.join("floating.cpp");
++    let second = work.0.join("again.cpp");
++    fs::write(&first, include_str!("floating/floating.cpp")).unwrap();
++    fs::write(&second, include_str!("floating/floating.cpp")).unwrap();
++    let run = |name: &str, extra: &str| {
++        fs::write(&config, compiler_config(&compiler, extra)).unwrap();
++        let directory = work.0.join(name);
++        fs::create_dir(&directory).unwrap();
++        let executable = env::var_os("SATANSFIDDLE_TEST_EXECUTABLE")
++            .unwrap_or_else(|| env!("CARGO_BIN_EXE_satansfiddle").into());
++        let result = Command::new(executable)
++            .env("SATANSFIDDLE_VERIFY", "1")
++            .arg("--config").arg(&config)
++            .arg("--output").arg(&directory)
++            .arg(&first).arg(&second)
++            .output().unwrap();
++        assert_success(&result);
++        let traces = String::from_utf8_lossy(&result.stderr).into_owned();
++        let entry = |unit: &str| traces.lines()
++            .find(|line| line.starts_with(&format!("satansfiddle: helper-masks {unit} ")))
++            .unwrap_or_else(|| panic!("no helper-mask trace for {unit}: {traces}"))
++            .to_owned();
++        (entry("floating.cpp"), entry("again.cpp"), fs::read(directory.join("again.o")).unwrap())
++    };
++    let (first_seeded, second_seeded, seeded) = run("seeded", "");
++    assert!(first_seeded.ends_with("gpr=0x0 fpr=0x0 seeded"), "{first_seeded}");
++    assert!(second_seeded.ends_with("gpr=0x0 fpr=0x0 seeded"), "{second_seeded}");
++    // floating.cpp's helper calls leave history that again.cpp starts from.
++    let (first_inherited, second_inherited, _) = run("inherited", "inherit_helper_masks = true");
++    assert!(first_inherited.ends_with("gpr=0x0 fpr=0x0 inherited"), "{first_inherited}");
++    assert!(second_inherited.ends_with(" inherited") && !second_inherited.contains("gpr=0x0 fpr=0x0"),
++        "the helper masks did not carry into the second unit: {second_inherited}");
++    let (_, second_pinned, pinned) = run("pinned", "inherit_helper_masks = true\n[[translation_units]]\nname = 'again.cpp'\ngpr_helper_mask = 0\nfpr_helper_mask = 0");
++    assert!(second_pinned.ends_with("gpr=0x0 fpr=0x0 seeded"), "{second_pinned}");
++    assert_eq!(seeded, pinned, "a translation_units row did not override the inherited masks");
++}
++
+ /// Requires both genuine compiler executables; explicitly ignored in generic CI.
+ #[test]
+ #[ignore = "requires SATANSFIDDLE_TEST_COMPILER_233 and SATANSFIDDLE_TEST_COMPILER_300 plus debug-symbol wibo"]
+diff --git a/tests/config/mod.rs b/tests/config/mod.rs
+index 6de38e9..33cddab 100644
+--- a/tests/config/mod.rs
++++ b/tests/config/mod.rs
+@@ -17,6 +17,15 @@ fn legacy_config_and_defaults() {
+     assert!(minimal.translation_units.is_empty());
+ }
+ 
++#[test]
++fn inherited_helper_masks_keep_rows_and_reject_defaults() {
++    let config = parse("inherit_helper_masks = true\n[[translation_units]]\nname = 'x.cpp'\ngpr_helper_mask = 0x30\nfpr_helper_mask = 0\n").unwrap();
++    assert!(config.inherit_helper_masks);
++    assert!(!parse("").unwrap().inherit_helper_masks);
++    assert!(parse("inherit_helper_masks = true\ndefault_gpr_helper_mask = 0x30\n").is_err());
++    assert!(parse("inherit_helper_masks = true\ndefault_fpr_helper_mask = 0x1000\n").is_err());
++}
++
+ #[test]
+ fn example_uses_typed_schema() {
+     Config::parse(include_str!("../../config.example.toml")).unwrap();
