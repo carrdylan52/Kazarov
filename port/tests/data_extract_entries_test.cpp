@@ -323,3 +323,17 @@ TEST(DataExtractEntries, TemporaryFilesAreCreatedOnlyUnderTheRoot) {
     fs::remove(dir / "out/movie");
     fs::remove_all(dir);
 }
+
+TEST(DataExtractEntries, MakesNoDirectoryThroughALink) {
+    fs::path dir = TempDir("entries_directory_link");
+    fs::create_directories(dir / "out");
+    fs::create_directories(dir / "elsewhere");
+    if (!Linked(dir / "elsewhere", dir / "out/movie", true)) {
+        fs::remove_all(dir);
+        GTEST_SKIP() << "cannot create links here";
+    }
+    EXPECT_THROW(kzdata::CreateTemporary(dir / "out", "movie/new/file.bin"), kzdata::Error);
+    EXPECT_TRUE(fs::is_empty(dir / "elsewhere"));
+    fs::remove(dir / "out/movie");
+    fs::remove_all(dir);
+}

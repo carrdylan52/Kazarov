@@ -221,7 +221,18 @@ inline void RefuseLinks(const fs::path &out, std::string_view path) {
 // so whoever can swap a directory there already controls the user's files.
 inline NewFile CreateTemporary(const fs::path &out, std::string_view path) {
     fs::path target = out / fs::path(path);
-    fs::create_directories(target.parent_path());
+    // One directory at a time, each looked at before anything is made inside it, so a link on the
+    // way is refused before a directory appears at its far end.
+    RefuseLinks(out, "");
+    fs::create_directories(out);
+    fs::path at = out;
+    for (const fs::path &component : fs::path(path).parent_path()) {
+        at /= component;
+        if (IsLinkLike(at)) {
+            Fail("{} is a link", at.string());
+        }
+        fs::create_directory(at);
+    }
     RefuseLinks(out, path);
     return NewFile(TemporaryBeside(target));
 }
