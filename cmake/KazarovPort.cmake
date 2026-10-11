@@ -75,16 +75,16 @@ endfunction()
 #                 [DISCORD_CLIENT_ID <id>] [DISCORD_IMAGE <asset>] [DISCORD_IMAGE_TEXT <text>]
 #                 [SHADER_DIRS <dir>...] [THIRD_PARTY_DIRS <dir>...] [DEFINES <define>...])
 #
-# An OBJECT library of the shared host code (port/gfx, port/platform, port/audio), compiled without
-# any game header. APP_NAME is the name the game shows, APP_ID its lower-case identifier (the
-# directory of an installed copy's data and saves), ENV_PREFIX what its environment variables start
-# with, underscore included, MIN_VULKAN the oldest Vulkan version the game accepts in the loader and
-# the device, ICON the window icon as raw square RGBA pixels. APP_IDENTIFIER names the game to the
-# desktop (APP_ID if not given). PROJECT_LABEL and PROJECT_URL are the Discord presence's button,
-# DISCORD_* its application and small image; without DISCORD_CLIENT_ID there is no presence. They
-# reach the code as generated/app/app_info.hpp and generated/app/icon.hpp. SHADER_DIRS adds the
-# game's own shaders to the renderer's. THIRD_PARTY_DIRS are where kz_port_third_party looks before
-# it downloads.
+# An OBJECT library of the shared host code (port/gfx, port/platform, port/audio, port/sce_core,
+# port/runtime), compiled without any game header. APP_NAME is the name the game shows, APP_ID its
+# lower-case identifier (the directory of an installed copy's data and saves), ENV_PREFIX what its
+# environment variables start with, underscore included, MIN_VULKAN the oldest Vulkan version the
+# game accepts in the loader and the device, ICON the window icon as raw square RGBA pixels.
+# APP_IDENTIFIER names the game to the desktop (APP_ID if not given). PROJECT_LABEL and PROJECT_URL
+# are the Discord presence's button, DISCORD_* its application and small image; without
+# DISCORD_CLIENT_ID there is no presence. They reach the code as generated/app/app_info.hpp and
+# generated/app/icon.hpp. SHADER_DIRS adds the game's own shaders to the renderer's.
+# THIRD_PARTY_DIRS are where kz_port_third_party looks before it downloads.
 function(kz_port_library target)
     set(strings APP_NAME APP_ID APP_IDENTIFIER ENV_PREFIX PROJECT_LABEL PROJECT_URL DISCORD_CLIENT_ID
         DISCORD_IMAGE DISCORD_IMAGE_TEXT)
@@ -150,11 +150,16 @@ inline constexpr const char *kDiscordImageText = ${DISCORD_IMAGE_TEXT_LITERAL};
     kz_port_shaders(shader_headers DIRS ${KZ_ROOT}/port/gfx/shaders ${arg_SHADER_DIRS})
     file(GLOB_RECURSE sources CONFIGURE_DEPENDS ${KZ_ROOT}/port/gfx/*.cpp ${KZ_ROOT}/port/platform/*.cpp
         ${KZ_ROOT}/port/audio/*.cpp)
+    file(GLOB_RECURSE game_math CONFIGURE_DEPENDS ${KZ_ROOT}/port/sce_core/*.cpp
+        ${KZ_ROOT}/port/runtime/*.cpp)
     kz_port_third_party(third_party_dirs SEARCH ${arg_THIRD_PARTY_DIRS})
 
-    add_library(${target} OBJECT ${sources} ${shader_headers})
+    add_library(${target} OBJECT ${sources} ${game_math} ${shader_headers})
     target_include_directories(${target} PUBLIC ${KZ_ROOT}/port ${generated})
     target_include_directories(${target} SYSTEM PRIVATE ${third_party_dirs})
+    # The game's arithmetic, which these carry out for it, rounds the same on arm64 as on x86-64 only
+    # without fused multiply-adds.
+    set_property(SOURCE ${game_math} APPEND PROPERTY COMPILE_OPTIONS -ffp-contract=off)
     target_link_libraries(${target} PUBLIC SDL3::SDL3 Vulkan::Vulkan nlohmann_json::nlohmann_json)
     target_compile_definitions(${target} PUBLIC ${arg_DEFINES})
     target_compile_options(${target} PRIVATE -Wall -ffunction-sections -fdata-sections)
