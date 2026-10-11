@@ -13,16 +13,15 @@
 #include <exception>
 #include <format>
 #include <mutex>
+#include <stdexcept>
 #include <string_view>
 #include <system_error>
 #include <thread>
 #include <utility>
 #include <vector>
 
-#include "config.hpp"
-#include "exitcodes.hpp"
+#include "config_base.hpp"
 #include "gfx/gfx.hpp"
-#include "logical_frame.hpp"
 #include "overlay.hpp"
 #include "paths.hpp"
 #include "window.hpp"
@@ -41,12 +40,17 @@ constexpr Color kButton = {0x2c, 0x38, 0x56, 0x80};
 constexpr Color kButtonLit = {0x46, 0x5c, 0x8c, 0x80};
 constexpr Color kTrack = {0x2c, 0x38, 0x56, 0x80};
 
+// The screen's own layout space, whatever the game's logical frame is.
+constexpr float kScreenWidth = 640.0f;
+constexpr float kScreenHeight = 480.0f;
+
 // Neither a dialog answer nor progress has a frame rate of its own; this bounds how long the screen
 // goes without pumping events when nothing arrives.
 constexpr int                       kIdleMilliseconds = 50;
 constexpr std::chrono::milliseconds kIdle{kIdleMilliseconds};
 
-FirstRunChooser chooser;
+FirstRunChooser     chooser;
+const FirstRunGame *g_game = nullptr;
 
 constexpr float kAdvance = kOverlayAdvance;
 
@@ -63,7 +67,7 @@ std::string Fit(std::string_view text, float scale, float width) {
     return room <= 3 ? std::string() : "..." + std::string(text.substr(text.size() - (room - 3)));
 }
 
-// Everything a screen draws, in the game's logical 640x480, as one batch of untextured quads.
+// Everything a screen draws, as one batch of untextured quads.
 struct Canvas {
     std::vector<gfx::Vertex2D> quads;
 
@@ -96,7 +100,7 @@ struct Canvas {
     }
 
     void Centered(float y, float scale, std::string_view text, const Color &color) {
-        Text((kLogicalWidth - TextWidth(text, scale)) * 0.5f, y, scale, text, color);
+        Text((kScreenWidth - TextWidth(text, scale)) * 0.5f, y, scale, text, color);
     }
 
     void Present() const {
@@ -127,10 +131,11 @@ struct Button {
     const char      *key;
 };
 
+// The folder button's label is the game's.
 constexpr Button kButtons[] = {
-    {{80.0f, 236.0f, 480.0f, 44.0f}, Action::DiscImage, "DISC IMAGE (.ISO .BIN .IMG)",       "ENTER"},
-    {{80.0f, 292.0f, 480.0f, 44.0f}, Action::Folder,    "FOLDER WITH DATA.DAT AND DATA.HD2", "F"    },
-    {{80.0f, 348.0f, 480.0f, 44.0f}, Action::Quit,      "QUIT",                              ""     },
+    {{80.0f, 236.0f, 480.0f, 44.0f}, Action::DiscImage, "DISC IMAGE (.ISO .BIN .IMG)", "ENTER"},
+    {{80.0f, 292.0f, 480.0f, 44.0f}, Action::Folder,    nullptr,                       "F"    },
+    {{80.0f, 348.0f, 480.0f, 44.0f}, Action::Quit,      "QUIT",                        ""     },
 };
 
 struct Input {
@@ -224,12 +229,10 @@ void OpenDialog(FirstRunSource source) {
         type = SDL_FILEDIALOG_OPENFILE;
         SDL_SetPointerProperty(props, SDL_PROP_FILE_DIALOG_FILTERS_POINTER, const_cast<SDL_DialogFileFilter *>(kImages));
         SDL_SetNumberProperty(props, SDL_PROP_FILE_DIALOG_NFILTERS_NUMBER, std::size(kImages));
-        SDL_SetStringProperty(props, SDL_PROP_FILE_DIALOG_TITLE_STRING,
-                              "Choose your PAL disc image: the game data is extracted from it once");
+        SDL_SetStringProperty(props, SDL_PROP_FILE_DIALOG_TITLE_STRING, g_game->image_prompt.c_str());
     } else {
         type = SDL_FILEDIALOG_OPENFOLDER;
-        SDL_SetStringProperty(props, SDL_PROP_FILE_DIALOG_TITLE_STRING,
-                              "Choose the folder that holds DATA.DAT and DATA.HD2 from your PAL disc");
+        SDL_SetStringProperty(props, SDL_PROP_FILE_DIALOG_TITLE_STRING, g_game->folder_prompt.c_str());
     }
     SDL_SetStringProperty(props, SDL_PROP_FILE_DIALOG_ACCEPT_STRING, "Extract");
     SDL_ShowFileDialogWithProperties(type, OnDialog, nullptr, props);
@@ -252,7 +255,8 @@ void DrawChooser(const fs::path &root, bool waiting) {
         const Button &button = kButtons[i];
         canvas.Rect(button.rect.x, button.rect.y, button.rect.w, button.rect.h,
                     i == input.hover ? kButtonLit : kButton);
-        canvas.Text(button.rect.x + 16.0f, button.rect.y + 15.0f, 2.0f, button.label, kText);
+        canvas.Text(button.rect.x + 16.0f, button.rect.y + 15.0f, 2.0f,
+                    button.label != nullptr ? button.label : g_game->folder_label.c_str(), kText);
         canvas.Text(button.rect.x + button.rect.w - 16.0f - TextWidth(button.key, 1.0f), button.rect.y + 18.0f,
                     1.0f, button.key, kDim);
     }
@@ -262,7 +266,7 @@ void DrawChooser(const fs::path &root, bool waiting) {
     canvas.Present();
 }
 
-void DrawProgress(const fs::path &source, const dcdata::Progress &progress) {
+void DrawProgress(const fs::path &source, const FirstRunProgress &progress) {
     constexpr float kBarX = 60.0f;
     constexpr float kBarY = 228.0f;
     constexpr float kBarW = 520.0f;
@@ -282,7 +286,7 @@ void DrawProgress(const fs::path &source, const dcdata::Progress &progress) {
     canvas.Present();
 }
 
-void SetTitle(const dcdata::Progress &progress) {
+void SetTitle(const FirstRunProgress &progress) {
     static std::size_t shown = static_cast<std::size_t>(-1);
     if (progress.files != shown) {
         shown = progress.files;
@@ -349,8 +353,8 @@ void PrintFlatpakHint(const fs::path &root) {
     if (const char *id = std::getenv("FLATPAK_ID"); id != nullptr && *id != '\0') {
         std::fprintf(stderr,
                      "inside the Flatpak, from a shell: flatpak run --filesystem=<folder of the image>:ro "
-                     "--command=dcdata %s extract <disc image> %s\n",
-                     id, PathsDisplay(root).c_str());
+                     "--command=%s %s extract <disc image> %s\n",
+                     g_game->tool.c_str(), id, PathsDisplay(root).c_str());
     }
 }
 
@@ -371,15 +375,15 @@ bool FirstRunDataMissing(const fs::path &root) {
     return true;
 }
 
-FirstRunOutcome FirstRunExtract(const fs::path &source, const fs::path &root,
-                                const std::function<bool(const dcdata::Progress &)> &tick) {
+FirstRunOutcome FirstRunExtract(const FirstRunGame &game, const fs::path &source, const fs::path &root,
+                                const FirstRunTick &tick) {
     // A symlinked data directory is filled in place: replacing it would drop the link.
     std::error_code         error;
     bool                    in_place = fs::is_symlink(root.has_filename() ? root : root.parent_path(), error);
     fs::path                target = in_place ? root : Partial(root);
     std::mutex              mutex;
     std::condition_variable changed;
-    dcdata::Progress        latest;
+    FirstRunProgress        latest;
     bool                    fresh = false;
     bool                    finished = false;
     std::atomic<bool>       cancel = false;
@@ -387,8 +391,7 @@ FirstRunOutcome FirstRunExtract(const fs::path &source, const fs::path &root,
 
     std::thread worker([&] {
         try {
-            dcdata::Archive archive = dcdata::OpenArchive(source);
-            dcdata::Extract(archive, target, nullptr, [&](const dcdata::Progress &progress) {
+            game.extract(source, target, [&](const FirstRunProgress &progress) {
                 {
                     std::lock_guard lock(mutex);
                     latest = progress;
@@ -397,20 +400,14 @@ FirstRunOutcome FirstRunExtract(const fs::path &source, const fs::path &root,
                 changed.notify_one();
                 return !cancel.load();
             });
-            std::vector<unsigned char>          hd2 = dcdata::ReadExtent(archive.hd2);
-            std::vector<dcdata::Record>         records = dcdata::ParseIndex(hd2);
-            std::vector<const dcdata::Record *> bad = dcdata::Mismatched(records, target);
-            if (!bad.empty()) {
-                dcdata::Fail("{} files are missing or the wrong size after extraction, {} among them",
-                             bad.size(), bad.front()->path);
-            }
             if (!in_place) {
                 // The data check found root missing or without a file, so anything there is empty
                 // directories.
                 if (fs::exists(root)) {
                     if (!FirstRunDataMissing(root)) {
-                        dcdata::Fail("{} gained files during the extraction; the extracted data is in {}",
-                                     PathsDisplay(root), PathsDisplay(target));
+                        throw std::runtime_error(
+                            std::format("{} gained files during the extraction; the extracted data is in {}",
+                                        PathsDisplay(root), PathsDisplay(target)));
                     }
                     fs::remove_all(root);
                 }
@@ -430,7 +427,7 @@ FirstRunOutcome FirstRunExtract(const fs::path &source, const fs::path &root,
     std::unique_lock lock(mutex);
     while (!finished) {
         changed.wait_for(lock, kIdle, [&] { return fresh || finished; });
-        dcdata::Progress snapshot = latest;
+        FirstRunProgress snapshot = latest;
         fresh = false;
         lock.unlock();
         if (!tick(snapshot)) {
@@ -448,20 +445,21 @@ void FirstRunSetChooser(FirstRunChooser replacement) {
     chooser = std::move(replacement);
 }
 
-void FirstRunIfNoData(bool headless) {
+void FirstRunIfNoData(bool headless, const FirstRunGame &first_run) {
     const fs::path &root = PathsDataRoot();
     if (!FirstRunDataMissing(root) || (headless && !chooser)) {
         return;
     }
-    // No display at all: leave it to main's data check, which says what to run instead.
+    // No display at all: leave it to the game's data check, which says what to run instead.
     if (!headless && !SDL_InitSubSystem(SDL_INIT_VIDEO)) {
         std::fprintf(stderr, "no display for the first-run screen: %s\n", SDL_GetError());
         return;
     }
 
-    ConfigLoad();
-    const Config &config = ConfigGet();
-    WindowConfig  window;
+    g_game = &first_run;
+    ConfigBaseLoad();
+    const ConfigBase &config = ConfigBaseGet();
+    WindowConfig      window;
     window.width = config.window_width;
     window.height = config.window_height;
     window.fullscreen = config.fullscreen;
@@ -476,8 +474,8 @@ void FirstRunIfNoData(bool headless) {
     SDL_SetWindowTitle(WindowHandle(), "Game data needed");
 
     gfx::RendererConfig renderer;
-    renderer.logical_width = static_cast<uint32_t>(kLogicalWidth);
-    renderer.logical_height = static_cast<uint32_t>(kLogicalHeight);
+    renderer.logical_width = static_cast<uint32_t>(kScreenWidth);
+    renderer.logical_height = static_cast<uint32_t>(kScreenHeight);
     renderer.pipeline_cache = PathsSaveRoot() / "pipeline_cache.bin";
     renderer.offscreen = offscreen;
     gfx::RendererInit(WindowHandle(), renderer);
@@ -486,7 +484,7 @@ void FirstRunIfNoData(bool headless) {
     std::optional<fs::path> source = Choose(root);
     if (source) {
         input.pressed = Action::None;
-        outcome = FirstRunExtract(*source, root, [&](const dcdata::Progress &progress) {
+        outcome = FirstRunExtract(first_run, *source, root, [&](const FirstRunProgress &progress) {
             if (!WindowPollEvents()) {
                 return false;
             }
@@ -506,7 +504,7 @@ void FirstRunIfNoData(bool headless) {
         }
         gfx::RendererShutdown();
         WindowShutdown();
-        std::exit(kExitFailure);
+        std::exit(EXIT_FAILURE);
     }
     gfx::RendererShutdown();
     WindowShutdown();
