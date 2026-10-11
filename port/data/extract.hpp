@@ -4,6 +4,7 @@
 #include <cerrno>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -45,7 +46,7 @@ struct Entry {
 struct ManifestRow {
     std::string   sha256;
     std::uint64_t size = 0;
-    std::string   source; // the source file's name and size: a row is reused only from the same disc
+    std::string   source; // the source file's name and size, for a reader: nothing trusts it
     std::uint64_t offset = 0;
 };
 
@@ -179,6 +180,29 @@ inline std::string SourceIdentity(const fs::path &file) {
     return std::format("{}@{}", file.filename().string(), error ? 0 : size);
 }
 
+// The extent's hash when `target` holds exactly its bytes, or nothing. Both are read: neither a
+// manifest nor a source's name and size says what either holds now.
+inline std::string HashIfSame(const Extent &extent, const fs::path &target, std::vector<unsigned char> &chunk,
+                              std::vector<unsigned char> &held) {
+    Reader        source(extent.file);
+    Reader        kept(target);
+    Sha256        hash;
+    std::uint64_t offset = 0;
+    held.resize(chunk.size());
+    for (std::uint64_t left = extent.size; left != 0;) {
+        std::size_t step = static_cast<std::size_t>(std::min<std::uint64_t>(left, chunk.size()));
+        source.Read(extent.offset + offset, chunk.data(), step);
+        kept.Read(offset, held.data(), step);
+        if (std::memcmp(chunk.data(), held.data(), step) != 0) {
+            return {};
+        }
+        hash.Update({chunk.data(), step});
+        offset += step;
+        left -= step;
+    }
+    return hash.FinishHex();
+}
+
 inline std::string HashFile(const fs::path &path, std::uint64_t offset, std::uint64_t size,
                             std::vector<unsigned char> &chunk) {
     Reader reader(path);
@@ -301,11 +325,10 @@ inline void CheckEntries(std::span<const Entry> entries, const fs::path &out, co
     }
 }
 
-// Copies each entry's extent to out/<path> unless the file there already holds it, and records
-// its hash in `next`. `previous` is the manifest an earlier run left, which saves rereading files
-// it already proved.
-inline Result ExtractEntries(std::span<const Entry> entries, const fs::path &out, const Manifest &previous,
-                             Manifest &next, const ProgressCallback &progress = {}) {
+// Copies each entry's extent to out/<path> unless the file there already holds its bytes, and
+// records its hash in `next`.
+inline Result ExtractEntries(std::span<const Entry> entries, const fs::path &out, Manifest &next,
+                             const ProgressCallback &progress = {}) {
     CheckEntries(entries, out, next);
     Result   result;
     Progress done{.total_files = entries.size()};
@@ -320,23 +343,13 @@ inline Result ExtractEntries(std::span<const Entry> entries, const fs::path &out
 
     fs::create_directories(out);
     std::vector<unsigned char> chunk(4 << 20);
+    std::vector<unsigned char> held;
     for (const Entry &entry : entries) {
         fs::path    target = out / fs::path(entry.path);
         std::string source = SourceIdentity(entry.extent.file);
         result.bytes += entry.extent.size;
         if (IsCurrent(target, entry.extent.size)) {
-            auto        known = previous.find(entry.path);
-            std::string hash;
-            if (known != previous.end() && known->second.source == source &&
-                known->second.offset == entry.extent.offset && known->second.size == entry.extent.size) {
-                hash = known->second.sha256;
-            } else {
-                hash = HashFile(entry.extent.file, entry.extent.offset, entry.extent.size, chunk);
-                if (HashFile(target, 0, entry.extent.size, chunk) != hash) {
-                    hash.clear();
-                }
-            }
-            if (!hash.empty()) {
+            if (std::string hash = HashIfSame(entry.extent, target, chunk, held); !hash.empty()) {
                 next[entry.path] = {hash, entry.extent.size, source, entry.extent.offset};
                 result.kept++;
                 done.files++;

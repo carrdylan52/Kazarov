@@ -22,7 +22,7 @@ std::vector<kzdata::Entry> Entries(const fs::path &source) {
 
 kzdata::Result Extract(const std::vector<kzdata::Entry> &entries, const fs::path &out) {
     kzdata::Manifest next;
-    kzdata::Result   result = kzdata::ExtractEntries(entries, out, kzdata::ReadManifest(out), next);
+    kzdata::Result   result = kzdata::ExtractEntries(entries, out, next);
     kzdata::WriteManifest(out, next);
     return result;
 }
@@ -103,7 +103,7 @@ TEST(DataExtractEntries, RefusesCollisionsBeforeWriting) {
     auto refused = [&](std::vector<kzdata::Entry> entries) {
         kzdata::Manifest next;
         try {
-            kzdata::ExtractEntries(entries, out, {}, next);
+            kzdata::ExtractEntries(entries, out, next);
         } catch (const kzdata::Error &) {
             return !fs::exists(out);
         }
@@ -121,7 +121,7 @@ TEST(DataExtractEntries, RefusesCollisionsBeforeWriting) {
 
     WriteBytes(out / "a", Pattern(3, 0));
     kzdata::Manifest next;
-    EXPECT_THROW(kzdata::ExtractEntries(std::vector<kzdata::Entry>{{"a/b.bin", {source, 0, 10}}}, out, {}, next),
+    EXPECT_THROW(kzdata::ExtractEntries(std::vector<kzdata::Entry>{{"a/b.bin", {source, 0, 10}}}, out, next),
                  kzdata::Error);
     EXPECT_EQ(ReadBytes(out / "a"), Pattern(3, 0));
     fs::remove_all(dir);
@@ -132,7 +132,7 @@ TEST(DataExtractEntries, CancelLeavesNoPartialFile) {
     WriteBytes(dir / "source.bin", Pattern(1000, 10));
     kzdata::Manifest next;
     int              calls = 0;
-    EXPECT_THROW(kzdata::ExtractEntries(Entries(dir / "source.bin"), dir / "out", {}, next,
+    EXPECT_THROW(kzdata::ExtractEntries(Entries(dir / "source.bin"), dir / "out", next,
                                         [&](const kzdata::Progress &) { return ++calls < 3; }),
                  kzdata::Error);
     EXPECT_TRUE(fs::is_regular_file(dir / "out/system.cnf"));
@@ -157,7 +157,7 @@ TEST(DataExtractEntries, RefusesBackslashesThatLeaveTheRoot) {
     kzdata::Manifest next;
     for (const char *path : {"..\\a.bin", "a\\b.bin", "c:a.bin"}) {
         EXPECT_THROW(kzdata::ExtractEntries(std::vector<kzdata::Entry>{{path, {dir / "source.bin", 0, 10}}},
-                                            dir / "out", {}, next),
+                                            dir / "out", next),
                      kzdata::Error)
             << path;
     }
@@ -190,14 +190,14 @@ TEST(DataExtractEntries, RefusesLinksUnderTheRoot) {
         GTEST_SKIP() << "cannot create links here";
     }
     kzdata::Manifest next;
-    EXPECT_THROW(kzdata::ExtractEntries(Entries(dir / "source.bin"), dir / "out", {}, next), kzdata::Error);
+    EXPECT_THROW(kzdata::ExtractEntries(Entries(dir / "source.bin"), dir / "out", next), kzdata::Error);
     EXPECT_TRUE(fs::is_empty(dir / "elsewhere"));
     EXPECT_FALSE(fs::exists(dir / "out/system.cnf"));
 
     fs::remove(dir / "out/movie");
     WriteBytes(dir / "elsewhere/kept", Pattern(100, 1));
     ASSERT_TRUE(Linked(dir / "elsewhere/kept", dir / "out/system.cnf", false));
-    EXPECT_THROW(kzdata::ExtractEntries(Entries(dir / "source.bin"), dir / "out", {}, next), kzdata::Error);
+    EXPECT_THROW(kzdata::ExtractEntries(Entries(dir / "source.bin"), dir / "out", next), kzdata::Error);
     EXPECT_EQ(ReadBytes(dir / "elsewhere/kept"), Pattern(100, 1));
     fs::remove_all(dir);
 }
@@ -233,5 +233,29 @@ TEST(DataExtractEntries, VerifyReportsLinks) {
         GTEST_SKIP() << "cannot create links here";
     }
     EXPECT_EQ(kzdata::Verify(dir / "out").size(), 1u);
+    fs::remove_all(dir);
+}
+
+TEST(DataExtractEntries, KeepsOnlyFilesHoldingTheExtentsBytes) {
+    fs::path dir = TempDir("entries_prove");
+    Bytes    source = Pattern(1000, 15);
+    WriteBytes(dir / "source.bin", source);
+    auto entries = Entries(dir / "source.bin");
+    Extract(entries, dir / "out");
+
+    // An output edited in place, its size and the manifest unchanged.
+    WriteBytes(dir / "out/system.cnf", Pattern(100, 16));
+    kzdata::Result edited = Extract(entries, dir / "out");
+    EXPECT_EQ(edited.written, 1u);
+    EXPECT_EQ(ReadBytes(dir / "out/system.cnf"), Bytes(source.begin(), source.begin() + 100));
+
+    // A different disc under the same name and size.
+    Bytes other = Pattern(1000, 17);
+    WriteBytes(dir / "source.bin", other);
+    kzdata::Result replaced = Extract(entries, dir / "out");
+    EXPECT_EQ(replaced.written, 2u);
+    EXPECT_EQ(replaced.kept, 1u);
+    EXPECT_EQ(ReadBytes(dir / "out/movie/open1.pss"), Bytes(other.begin() + 100, other.end()));
+    EXPECT_TRUE(kzdata::Verify(dir / "out").empty());
     fs::remove_all(dir);
 }
