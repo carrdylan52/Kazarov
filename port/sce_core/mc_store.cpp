@@ -341,7 +341,8 @@ int Read(int fd, void *buffer, int size) {
     if (open == nullptr) {
         return Finish(kFuncRead, kNoEntry);
     }
-    if ((open->flags & kOpenRead) == 0) {
+    // fread and fwrite would take a negative size as a huge one.
+    if ((open->flags & kOpenRead) == 0 || size < 0) {
         return Finish(kFuncRead, kDeniedPermit);
     }
     std::fseek(open->file, 0, SEEK_CUR);
@@ -353,7 +354,8 @@ int Write(int fd, const void *buffer, int size) {
     if (open == nullptr) {
         return Finish(kFuncWrite, kNoEntry);
     }
-    if ((open->flags & kOpenWrite) == 0) {
+    // fread and fwrite would take a negative size as a huge one.
+    if ((open->flags & kOpenWrite) == 0 || size < 0) {
         return Finish(kFuncWrite, kDeniedPermit);
     }
     std::fseek(open->file, 0, SEEK_CUR);

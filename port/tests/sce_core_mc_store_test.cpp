@@ -88,3 +88,31 @@ TEST(SceCoreMcStore, CloseAllWritesOutWhatIsBuffered) {
     EXPECT_EQ(Synced().second, mc::kNoEntry);
     std::filesystem::remove_all(root);
 }
+
+TEST(SceCoreMcStore, ANegativeSizeIsRefused) {
+    auto root = UseTempSaveRoot("kz_mc_negative_");
+    mc::Init();
+    ASSERT_EQ(mc::Open(0, "/data", mc::kOpenRead | mc::kOpenWrite | mc::kOpenCreate), 0);
+    int fd = Synced().second;
+    ASSERT_GE(fd, 0);
+    ASSERT_EQ(mc::Write(fd, "save", 4), 0);
+    ASSERT_EQ(Synced().second, 4);
+    ASSERT_EQ(mc::Close(fd), 0);
+    Synced();
+
+    ASSERT_EQ(mc::Open(0, "/data", mc::kOpenRead | mc::kOpenWrite), 0);
+    fd = Synced().second;
+    ASSERT_GE(fd, 0);
+    char buffer[2] = {'x', 'x'};
+    ASSERT_EQ(mc::Read(fd, buffer, -1), 0);
+    EXPECT_EQ(Synced(), std::make_pair(0x05, int{mc::kDeniedPermit}));
+    EXPECT_EQ(buffer[0], 'x');
+    ASSERT_EQ(mc::Write(fd, buffer, -1), 0);
+    EXPECT_EQ(Synced(), std::make_pair(0x06, int{mc::kDeniedPermit}));
+    ASSERT_EQ(mc::Read(fd, buffer, 2), 0);
+    EXPECT_EQ(Synced(), std::make_pair(0x05, 2));
+    EXPECT_EQ(std::string(buffer, 2), "sa");
+    mc::Close(fd);
+    Synced();
+    std::filesystem::remove_all(root);
+}
