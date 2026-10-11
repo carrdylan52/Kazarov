@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "app/app_info.hpp"
 #include "context.hpp"
 #include "displaylist.hpp"
 
@@ -107,7 +108,7 @@ void CreateInstance() {
     }
     std::vector<const char *> layers;
 
-    bool wanted = g.config.validation || SDL_getenv("DC_VULKAN_VALIDATION") != nullptr;
+    bool wanted = g.config.validation || SDL_getenv(KZ_APP_ENV("VULKAN_VALIDATION")) != nullptr;
 #ifdef NDEBUG
     wanted = false;
 #endif
@@ -122,9 +123,9 @@ void CreateInstance() {
 
     VkApplicationInfo app = {};
     app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-    app.pApplicationName = "Dark Cloud";
+    app.pApplicationName = app::kName;
     app.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
-    app.pEngineName = "dcdecomp";
+    app.pEngineName = "Kazarov";
     app.engineVersion = VK_MAKE_VERSION(1, 0, 0);
     app.apiVersion = VK_API_VERSION_1_4;
 

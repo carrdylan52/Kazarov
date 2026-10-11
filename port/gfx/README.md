@@ -1,9 +1,9 @@
 # gfx
 
 The port's Vulkan renderer (1.3 or later, see "Device"). `gfx.hpp` is the whole public API (namespace `gfx`); everything
-else is internal. No game header is reachable from here: `platform/`, `gfx/` and `audio/` build as
-`dc_host`, without `port.h` or the game's include paths. Replacement units include
-`"gfx/gfx.hpp"`.
+else is internal. No game header is reachable from here: `kz_port_library()`
+(`cmake/KazarovPort.cmake`) builds it without `port.h` or the game's include paths. Replacement
+units include `"gfx/gfx.hpp"`.
 
 ## Lifecycle
 
