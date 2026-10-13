@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "embed.hpp"
 #include "gfx/gfx.hpp"
 
 namespace {
@@ -28,6 +29,11 @@ void Check(bool ok, const char *what) {
     if (!ok) {
         std::fprintf(stderr, "window: %s: %s\n", what, SDL_GetError());
     }
+}
+
+// An embedded game takes its events from the host, which owns the SDL event queue.
+bool NextEvent(SDL_Event &event) {
+    return EmbedActive() ? EmbedPollEvent(&event) : SDL_PollEvent(&event);
 }
 
 struct Placement {
@@ -59,9 +65,12 @@ Placement Place(const WindowConfig &config, SDL_DisplayID display) {
 void WindowSetIdentity(const WindowIdentity &identity) { g_identity = identity; }
 
 void WindowInit(const WindowConfig &config) {
-    SDL_SetAppMetadata(g_identity.title, nullptr, g_identity.app_id);
+    // The host sets the app metadata and the driver hints of the shared SDL once.
+    if (!EmbedActive()) {
+        SDL_SetAppMetadata(g_identity.title, nullptr, g_identity.app_id);
+    }
     g_headless = config.headless;
-    if (config.headless) {
+    if (config.headless && !EmbedActive()) {
 #ifdef _WIN32
         SDL_SetHint(SDL_HINT_VIDEO_DRIVER, config.vulkan ? "windows" : "offscreen");
 #else
@@ -69,7 +78,7 @@ void WindowInit(const WindowConfig &config) {
 #endif
         SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "dummy");
     }
-    if (!SDL_Init(SDL_INIT_VIDEO)) {
+    if (EmbedActive() ? !SDL_InitSubSystem(SDL_INIT_VIDEO) : !SDL_Init(SDL_INIT_VIDEO)) {
         Fatal("SDL_Init");
     }
     // SDL3 backs a Vulkan window on macOS with a CAMetalLayer (VK_EXT_metal_surface) by itself.
@@ -163,6 +172,11 @@ void WindowShutdown() {
     g_window = nullptr;
     g_mode_event = false;
     g_hooks.clear();
+    if (EmbedActive()) {
+        // The host owns SDL and the other game has its own window: drop only this game's video reference.
+        SDL_QuitSubSystem(SDL_INIT_VIDEO);
+        return;
+    }
     SDL_Quit();
 }
 
@@ -224,7 +238,7 @@ std::vector<DisplayModeSize> WindowDisplayModes() {
 bool WindowPollEvents() {
     bool      running = true;
     SDL_Event event;
-    while (SDL_PollEvent(&event)) {
+    while (NextEvent(event)) {
         for (auto hook : g_hooks) {
             hook(event);
         }

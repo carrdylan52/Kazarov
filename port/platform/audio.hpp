@@ -17,3 +17,8 @@ void AudioOutputStop();
 void AudioSetSurround(bool on);
 
 bool AudioOutputRunning();
+
+// Pauses or resumes the stream's device. A paused stream's callback does not run, so the mixer does not
+// advance; an embedding host uses it to park a game's audio. A pause made before the stream opens holds
+// once it does.
+void AudioOutputPause(bool paused);

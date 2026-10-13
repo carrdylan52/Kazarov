@@ -24,6 +24,7 @@ void              *g_user = nullptr;
 std::vector<float> g_chunk;
 int                g_rate = 48000;
 bool               g_surround = false;
+bool               g_paused = false;
 
 // Stereo to 5.1 in SDL's channel order: front left and right, centre, bass, back left and right.
 // The rears carry the side signal (left minus right) 12 ms late and with the top rolled off, the
@@ -153,7 +154,11 @@ bool AudioOutputStart(int rate, AudioRenderFn render, void *user) {
         SDL_QuitSubSystem(SDL_INIT_AUDIO);
         return false;
     }
-    SDL_ResumeAudioStreamDevice(g_stream);
+    if (g_paused) {
+        SDL_PauseAudioStreamDevice(g_stream);
+    } else {
+        SDL_ResumeAudioStreamDevice(g_stream);
+    }
     return true;
 }
 
@@ -191,4 +196,16 @@ void AudioOutputStop() {
 
 bool AudioOutputRunning() {
     return g_stream != nullptr || g_wav.writer.IsOpen();
+}
+
+void AudioOutputPause(bool paused) {
+    g_paused = paused;
+    if (g_stream == nullptr) {
+        return;
+    }
+    if (paused) {
+        SDL_PauseAudioStreamDevice(g_stream);
+    } else {
+        SDL_ResumeAudioStreamDevice(g_stream);
+    }
 }

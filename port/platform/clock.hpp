@@ -46,6 +46,10 @@ bool ClockUnbounded();
 // Re-anchors the clock at the current time with a count of zero.
 void ClockReset();
 
+// Re-anchors the clock at the current time and keeps the count, so an embedding host that parked the
+// game does not have the parked time replayed as ticks. ClockReset is not this: it zeroes the count.
+void ClockRebase();
+
 std::int64_t ClockTickCount();
 
 void ClockSetTickCallback(ClockTickCallback callback);
