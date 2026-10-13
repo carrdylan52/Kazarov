@@ -7,6 +7,7 @@
 #include "sce/threads.hpp"
 
 #include "platform/clock.hpp"
+#include "platform/fiber.hpp"
 
 #include <cstddef>
 #include <cstdio>
@@ -24,6 +25,7 @@
 // declared here. They are kernel32 exports with one calling convention on x64 and arm64.
 extern "C" {
 void *ConvertThreadToFiber(void *parameter);
+int   IsThreadAFiber();
 void *CreateFiber(std::size_t stack_size, void (*start)(void *), void *parameter);
 void  SwitchToFiber(void *fiber);
 void  DeleteFiber(void *fiber);
@@ -52,7 +54,8 @@ void FiberStart(void *) {
 }
 
 void ContextInitMain(Context &c) {
-    c.fiber = ConvertThreadToFiber(nullptr);
+    // An embedding host already runs the game on a fiber, and the thread cannot be converted twice.
+    c.fiber = IsThreadAFiber() ? CurrentFiber() : ConvertThreadToFiber(nullptr);
     if (c.fiber == nullptr) {
         std::fprintf(stderr, "eekernel: ConvertThreadToFiber failed\n");
         std::abort();

@@ -46,6 +46,10 @@ bool ClockUnbounded();
 // Re-anchors the clock at the current time with a count of zero.
 void ClockReset();
 
+// Re-anchors the schedule at the current time and keeps the count: time spent parked by a host
+// (embedded mode) is not replayed as ticks.
+void ClockRebase();
+
 std::int64_t ClockTickCount();
 
 void ClockSetTickCallback(ClockTickCallback callback);

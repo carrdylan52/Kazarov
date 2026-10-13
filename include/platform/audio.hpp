@@ -17,3 +17,7 @@ void AudioOutputStop();
 void AudioSetSurround(bool on);
 
 bool AudioOutputRunning();
+
+// Pauses or resumes this game's own output device. A paused stream's callback does not run, so the
+// mixer does not advance. No-op without a device stream (none opened, or the WAV capture).
+void AudioOutputPause(bool paused);
