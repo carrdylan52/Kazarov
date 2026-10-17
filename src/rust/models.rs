@@ -756,6 +756,18 @@ fn textures(
                         .join("port_data")
                         .join(Path::new(&document).parent().unwrap()),
                 });
+            } else if entry["pictures"][0].get("canvas").is_some() {
+                // A canvas (an animation destination drawn at run time) still claims its name for the
+                // models beside it; otherwise an unrelated document's picture of that name is embedded,
+                // and with it that document's texture animation.
+                out.push(Texture {
+                    source: source.clone(),
+                    name: entry["name"].as_str().unwrap_or("").into(),
+                    sampler: entry["pictures"][0]["sampler"].clone(),
+                    asset: String::new(),
+                    pictures: Value::Null,
+                    directory: PathBuf::new(),
+                });
             }
         }
     }
@@ -803,7 +815,8 @@ fn material(
     let power = floats(b, at + 48, 1)?[0];
     let texture = name(bytes(b, at + 52, 32)?);
     let mut pbr = json!({"baseColorFactor":diffuse.iter().map(|v|v.clamp(0.,1.)).collect::<Vec<_>>(),"metallicFactor":0,"roughnessFactor":1});
-    let selected_texture = resolve_texture(all, alias, &texture)?;
+    // A canvas has no image to embed: the model binds it by name to the one its map's IMG entered.
+    let selected_texture = resolve_texture(all, alias, &texture)?.filter(|t| !t.asset.is_empty());
     let mut embedded_pictures = Value::Null;
     if let Some(t) = selected_texture {
         used.insert(t.source.clone());
