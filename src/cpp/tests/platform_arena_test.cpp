@@ -3,9 +3,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
-#include <string>
 
 #include "platform/arena.hpp"
 #include "platform/memory.hpp"
@@ -81,10 +79,15 @@ TEST(PlatformArenaBlock, OverflowNamesTheArena) {
 
 TEST(PlatformArenaBlock, OverflowOfAnUnnamedArenaGivesItsAddress) {
     static char key;
-    char address[64];
-    std::snprintf(address, sizeof address, "%p", static_cast<void *>(&key));
-    const std::string expected = std::string("arena ") + address + ": allocation overflow, 9 of 8 quadwords";
-    EXPECT_DEATH(ArenaOverflow(static_cast<const void *>(&key), 9, 8), expected.c_str());
+    // A death test's child may be a fresh process (always on Windows, and with the threadsafe style), so the address
+    // is not this one's. macOS extended regex has no \w, and gtest's own Windows matcher has no bracket expressions.
+#ifdef GTEST_USES_POSIX_RE
+    EXPECT_DEATH(ArenaOverflow(static_cast<const void *>(&key), 9, 8),
+                 "arena [[:alnum:]]+: allocation overflow, 9 of 8 quadwords");
+#else
+    EXPECT_DEATH(ArenaOverflow(static_cast<const void *>(&key), 9, 8),
+                 "arena \\w+: allocation overflow, 9 of 8 quadwords");
+#endif
 }
 
 TEST(PlatformArenaBlock, ContainsOnlyItsBlocks) {
