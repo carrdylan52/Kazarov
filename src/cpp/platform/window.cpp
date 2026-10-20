@@ -169,7 +169,9 @@ void WindowShutdown() {
     g_mode_event = false;
     g_hooks.clear();
     // Embedded, SDL belongs to the host: quitting would take its event queue and windows with it.
-    if (!EmbedActive()) {
+    if (EmbedActive()) {
+        SDL_QuitSubSystem(SDL_INIT_VIDEO);
+    } else {
         SDL_Quit();
     }
 }

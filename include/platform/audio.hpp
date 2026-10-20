@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 using AudioRenderFn = void (*)(void *user, float *out, int frames);
 
 // Opens the default playback device as a float stereo stream at rate and pulls interleaved
@@ -19,5 +21,8 @@ void AudioSetSurround(bool on);
 bool AudioOutputRunning();
 
 // Pauses or resumes this game's own output device. A paused stream's callback does not run, so the
-// mixer does not advance. No-op without a device stream (none opened, or the WAV capture).
-void AudioOutputPause(bool paused);
+// mixer does not advance. Also pauses WAV capture; remembers the policy for a later stream.
+// Returns false if SDL could not apply the requested device state.
+bool AudioOutputPause(bool paused);
+bool AudioOutputPaused();
+std::uint64_t AudioOutputRenderedFrames();

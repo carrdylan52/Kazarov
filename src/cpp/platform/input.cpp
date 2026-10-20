@@ -795,6 +795,32 @@ static InputGlyphFamily GamepadFamily(SDL_Gamepad *gamepad) {
                                       SDL_GetGamepadProduct(gamepad));
 }
 
+void InputResetTransient() {
+    g_keys.fill(false);
+    g_mouse_dx = g_mouse_dy = 0.0f;
+    g_menu_dx = g_menu_dy = 0.0f;
+    g_mouse_look = {0.0f, 0.0f, g_mouse_look.read};
+    g_mouse_look_total = {0, 0, g_mouse_look_total.epoch + 1};
+    g_last_latch_tick = -1;
+    g_stick_live = false;
+    g_touchpad.Reset();
+    g_touch_dx = g_touch_dy = g_touch_wheel = 0.0f;
+    g_touch_held = g_touch_tap = 0;
+    g_touch_tap_shown = false;
+    g_host_presses.fill(0);
+    g_host_polled.fill(false);
+    g_device.fill(InputPadState{});
+    g_state.fill(InputPadState{});
+    g_view.fill(InputPadState{});
+    MouseStop();
+}
+
+void InputActivateDevices() {
+    for (const PadSlot &slot : g_slots) {
+        if (slot.gamepad != nullptr) EnableGyro(slot.gamepad);
+    }
+}
+
 void InputPoll() {
     EnsureBindings();
     if (g_gamepad_subsystem) {
