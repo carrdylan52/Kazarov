@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 using AudioRenderFn = void (*)(void *user, float *out, int frames);
 
 // Opens the default playback device as a float stereo stream at rate and pulls interleaved
@@ -21,4 +23,7 @@ bool AudioOutputRunning();
 // Pauses or resumes the stream's device. A paused stream's callback does not run, so the mixer does not
 // advance; an embedding host uses it to park a game's audio. A pause made before the stream opens holds
 // once it does.
-void AudioOutputPause(bool paused);
+// Returns false if SDL could not apply the requested device state.
+bool AudioOutputPause(bool paused);
+bool AudioOutputPaused();
+std::uint64_t AudioOutputRenderedFrames();

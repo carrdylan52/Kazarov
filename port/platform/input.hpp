@@ -85,6 +85,11 @@ void InputShutdown();
 // Samples the gamepads, opening newly connected ones, and folds in the keyboard and mouse.
 void InputPoll();
 
+// Embedded ownership change: discard live cached input without changing bindings or replay state.
+void InputResetTransient();
+// Restore this runtime's sensor policy on the shared SDL controller handles.
+void InputActivateDevices();
+
 // The window event hook InputInit installs: keys, mouse buttons and motion, focus.
 void InputHandleEvent(const SDL_Event &event);
 

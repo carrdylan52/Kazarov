@@ -3,6 +3,7 @@
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -25,6 +26,7 @@ std::vector<float> g_chunk;
 int                g_rate = 48000;
 bool               g_surround = false;
 bool               g_paused = false;
+std::atomic<std::uint64_t> g_rendered_frames{0};
 
 // Stereo to 5.1 in SDL's channel order: front left and right, centre, bass, back left and right.
 // The rears carry the side signal (left minus right) 12 ms late and with the top rolled off, the
@@ -75,6 +77,7 @@ void SDLCALL Feed(void *, SDL_AudioStream *stream, int additional_amount, int) {
     while (frames > 0) {
         const int count = std::min(frames, kChunkFrames);
         g_render(g_user, g_chunk.data(), count);
+        g_rendered_frames.fetch_add(count, std::memory_order_relaxed);
         if (g_surround) {
             g_wide.resize(static_cast<std::size_t>(count) * 6);
             g_upmix.Run(g_chunk.data(), g_wide.data(), count, g_rate);
@@ -99,6 +102,7 @@ struct WavCapture {
 WavCapture g_wav;
 
 void CaptureTicks() {
+    if (g_paused) { g_wav.last_tick = ClockTickCount(); return; }
     const std::int64_t tick = ClockTickCount();
     if (tick > g_wav.last_tick) {
         g_wav.owed += static_cast<double>(tick - g_wav.last_tick) * g_wav.rate / ClockTickRate();
@@ -109,6 +113,7 @@ void CaptureTicks() {
     while (frames > 0) {
         const int count = std::min(frames, kChunkFrames);
         g_render(g_user, g_chunk.data(), count);
+        g_rendered_frames.fetch_add(count, std::memory_order_relaxed);
         g_wav.writer.Append(g_chunk.data(), count);
         frames -= count;
     }
@@ -198,14 +203,20 @@ bool AudioOutputRunning() {
     return g_stream != nullptr || g_wav.writer.IsOpen();
 }
 
-void AudioOutputPause(bool paused) {
+bool AudioOutputPause(bool paused) {
+    if (g_stream != nullptr) {
+        const bool ok = paused ? SDL_PauseAudioStreamDevice(g_stream) : SDL_ResumeAudioStreamDevice(g_stream);
+        if (!ok) return false;
+        // Pause stops new callbacks; locking waits for an already-running callback to finish.
+        SDL_LockAudioStream(g_stream);
+        SDL_UnlockAudioStream(g_stream);
+    }
     g_paused = paused;
-    if (g_stream == nullptr) {
-        return;
-    }
-    if (paused) {
-        SDL_PauseAudioStreamDevice(g_stream);
-    } else {
-        SDL_ResumeAudioStreamDevice(g_stream);
-    }
+    return true;
+}
+
+bool AudioOutputPaused() { return g_paused; }
+
+std::uint64_t AudioOutputRenderedFrames() {
+    return g_rendered_frames.load(std::memory_order_relaxed);
 }
