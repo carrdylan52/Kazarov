@@ -1852,7 +1852,7 @@ void InputSetMovementLocked(bool locked) { g_movement_locked = locked; }
 
 InputKeyboardMovement InputGetKeyboardMovement() {
     EnsureBindings();
-    if (g_menu_mouse || g_movement_locked) {
+    if (g_menu_mouse || g_movement_locked || g_text_entry) {
         return {};
     }
     InputKeyboardMouse held = g_override[0] ? g_scripted : LiveKeyboardMouse();

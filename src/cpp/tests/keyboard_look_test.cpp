@@ -36,6 +36,64 @@ TEST_F(KeyboardLook, MovementDoesNotHideSimultaneousControllerLook) {
     InputSetOverride(0, nullptr);
 }
 
+TEST_F(KeyboardLook, TextEntrySuppressesKeyboardMovementAndPreservesControllerLook) {
+    const InputKeyboardMouse keyboard{.keys = {SDL_SCANCODE_W, SDL_SCANCODE_D}};
+    const InputPadState controller{.connected = true, .left_x = 220, .left_y = 35, .right_x = 180, .right_y = 80};
+    const auto mixed = InputApplyKeyboardMouse(controller, keyboard);
+    InputSetOverride(0, &mixed);
+    InputSetScriptedDevices(keyboard);
+
+    const auto movement = InputGetKeyboardMovement();
+    ASSERT_GT(movement.x, 0.0f);
+    ASSERT_LT(movement.y, 0.0f);
+    const auto before = InputGetLookPad(0);
+    ASSERT_EQ(before.left_x, controller.left_x);
+    ASSERT_EQ(before.left_y, controller.left_y);
+
+    InputSetTextEntry(true);
+    const auto typing = InputGetKeyboardMovement();
+    EXPECT_EQ(typing.x, 0.0f);
+    EXPECT_EQ(typing.y, 0.0f);
+    const auto look = InputGetLookPad(0);
+    EXPECT_EQ(look.left_x, before.left_x);
+    EXPECT_EQ(look.left_y, before.left_y);
+    EXPECT_EQ(look.right_x, before.right_x);
+    EXPECT_EQ(look.right_y, before.right_y);
+
+    InputSetTextEntry(false);
+    const auto resumed = InputGetKeyboardMovement();
+    EXPECT_EQ(resumed.x, movement.x);
+    EXPECT_EQ(resumed.y, movement.y);
+}
+
+TEST_F(KeyboardLook, TextEntrySuppressesLiveReboundMovementUntilCaptureExpires) {
+    MouseConfigure(false, {});
+    const std::string_view binding[] = {"Up"};
+    ASSERT_TRUE(InputBindKeys("ly-", binding));
+    SDL_Event event{};
+    event.type = SDL_EVENT_KEY_DOWN;
+    event.key.scancode = SDL_SCANCODE_UP;
+    event.key.down = true;
+    InputHandleEvent(event);
+    ASSERT_LT(InputGetKeyboardMovement().y, 0.0f);
+
+    InputSetTextEntry(true);
+    EXPECT_EQ(InputGetKeyboardMovement().y, 0.0f);
+    for (int read = 0; read < 2; ++read) {
+        InputLatchPad(0);
+        EXPECT_EQ(InputGetKeyboardMovement().y, 0.0f);
+    }
+    // The text owner normally restates capture each tick. An abandoned owner
+    // already expires on the third pad read; keyboard movement follows it.
+    InputLatchPad(0);
+    EXPECT_LT(InputGetKeyboardMovement().y, 0.0f);
+
+    event.type = SDL_EVENT_KEY_UP;
+    event.key.down = false;
+    InputHandleEvent(event);
+    EXPECT_EQ(InputGetKeyboardMovement().y, 0.0f);
+}
+
 TEST_F(KeyboardLook, ScriptRetainsControllerAndMouseAxisProvenance) {
     InputResetBindings();
     const std::string_view binding[] = {"MouseY"};
