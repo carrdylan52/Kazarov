@@ -298,7 +298,7 @@ enum class InputHostAction {
 bool InputHostHeld(InputHostAction action);
 
 // Consumes one press of the action since the last call that returned true. Every key-down (not a
-// repeat) counts, so a press released before the next poll is not lost.
+// repeat) and live mouse-button down counts, so a press released before the next poll is not lost.
 bool InputHostPressed(InputHostAction action);
 
 // The keyboard and mouse the input script holds now; host actions read them beside the live devices,
@@ -338,7 +338,8 @@ bool InputActionTakesGamepad(std::string_view action);
 std::string InputBindingLabel(std::string_view action);
 
 // The individual source names used by InputBindingLabel, without its punctuation or "None".
-// Empty for an unknown action or an action without any keyboard/mouse bindings.
+// Empty for an unknown action or an action without any InputBindKeys sources (including legacy
+// Gamepad: sources). Separate controller bindings are reported by InputPadBindingNames.
 std::vector<std::string> InputBindingNames(std::string_view action);
 
 // Other actions using any of this action's physical keyboard, mouse or controller sources.

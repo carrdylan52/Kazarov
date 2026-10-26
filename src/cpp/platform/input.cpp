@@ -744,6 +744,14 @@ bool ActionUsesSource(std::size_t action, const Source &source) {
     if (source.kind != Source::GamepadButton && source.kind != Source::GamepadTrigger) {
         return false;
     }
+#ifdef KZ_TOUCH_OVERLAY
+    // The overlay presses logical gameplay buttons directly, even after the physical
+    // controller binding changes. Its host sources use the standard controller layout.
+    if (g_touch_overlay_visible && kActions[action].kind == ActionKind::Button &&
+        PadSourceButton(source, SDL_GAMEPAD_TYPE_STANDARD) == kActions[action].button) {
+        return true;
+    }
+#endif
     if (std::ranges::any_of(PadSources(action, g_pad_type), matches)) {
         return true;
     }
@@ -1181,6 +1189,12 @@ void InputHandleEvent(const SDL_Event &event) {
     if (event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
         (event.type == SDL_EVENT_MOUSE_MOTION && (event.motion.xrel != 0.0f || event.motion.yrel != 0.0f))) {
         g_last_keyboard = true;
+    }
+    if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_UP) {
+        // SDL may have updated a controller since our last poll. Count its pending edge
+        // before the mouse event changes held state and refreshes the host snapshots.
+        EnsureBindings();
+        PollHostActions();
     }
     const bool was_live = MouseInputLive();
     const bool swallowed = MouseHandleEvent(event);
@@ -1704,6 +1718,31 @@ std::vector<std::string> InputBindingConflicts(std::string_view action) {
         for (const Source &source : PadSources(i, g_pad_type)) {
             AppendSourceConflicts(i, source, names);
         }
+        // A second controller can use a different default Select source.
+        for (const PadSlot &slot : g_slots) {
+            if (slot.gamepad != nullptr) {
+                for (const Source &source : PadSources(i, SDL_GetGamepadType(slot.gamepad))) {
+                    AppendSourceConflicts(i, source, names);
+                }
+            }
+        }
+#ifdef KZ_TOUCH_OVERLAY
+        // Unlike physical bindings, overlay gameplay buttons keep their default mapping.
+        if (g_touch_overlay_visible && kActions[i].kind == ActionKind::Button) {
+            for (SDL_GamepadButton button : kGamepadButtons) {
+                Source source{.kind = Source::GamepadButton, .code = static_cast<int>(button)};
+                if (PadSourceButton(source, SDL_GAMEPAD_TYPE_STANDARD) == kActions[i].button) {
+                    AppendSourceConflicts(i, source, names);
+                }
+            }
+            for (int trigger = 0; trigger < kTriggerCount; ++trigger) {
+                Source source{.kind = Source::GamepadTrigger, .code = trigger};
+                if (PadSourceButton(source, SDL_GAMEPAD_TYPE_STANDARD) == kActions[i].button) {
+                    AppendSourceConflicts(i, source, names);
+                }
+            }
+        }
+#endif
     }
     return names;
 }

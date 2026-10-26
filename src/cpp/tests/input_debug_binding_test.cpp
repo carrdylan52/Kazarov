@@ -14,11 +14,24 @@ protected:
     void SetUp() override {
         InputShutdown();
         InputSetOverride(0, nullptr);
+        InputSetOverride(1, nullptr);
         InputResetBindings();
         MouseConfigure(false, {});
+#ifdef KZ_TOUCH_OVERLAY
+        InputSetTouchOverlay({});
+#endif
     }
 
-    void TearDown() override { SetUp(); }
+    void TearDown() override {
+        if (virtual_joystick != nullptr) SDL_CloseJoystick(virtual_joystick);
+        if (virtual_id != 0) SDL_DetachVirtualJoystick(virtual_id);
+        virtual_joystick = nullptr;
+        virtual_id = 0;
+        SetUp();
+    }
+
+    SDL_JoystickID virtual_id = 0;
+    SDL_Joystick *virtual_joystick = nullptr;
 
     void Key(SDL_Scancode scancode, bool down) {
         SDL_Event event{};
@@ -135,9 +148,9 @@ TEST_F(InputDebugBinding, ControllerR3RemainsGameplayWhileAnUnusedPaddleOpensDeb
     description.axis_mask = (1u << SDL_GAMEPAD_AXIS_COUNT) - 1;
     description.button_mask = (1u << SDL_GAMEPAD_BUTTON_COUNT) - 1;
     description.name = "Debug binding test";
-    const SDL_JoystickID id = SDL_AttachVirtualJoystick(&description);
+    const SDL_JoystickID id = virtual_id = SDL_AttachVirtualJoystick(&description);
     ASSERT_NE(id, 0u) << SDL_GetError();
-    SDL_Joystick *joystick = SDL_OpenJoystick(id);
+    SDL_Joystick *joystick = virtual_joystick = SDL_OpenJoystick(id);
     ASSERT_NE(joystick, nullptr) << SDL_GetError();
     const std::string_view r3[] = {"rightstick"};
     ASSERT_TRUE(InputBindPadButtons("mode_debug_menu", r3));
@@ -159,8 +172,6 @@ TEST_F(InputDebugBinding, ControllerR3RemainsGameplayWhileAnUnusedPaddleOpensDeb
     EXPECT_TRUE(InputHostHeld(InputHostAction::ModeDebugMenu));
     EXPECT_TRUE(InputHostPressed(InputHostAction::ModeDebugMenu));
     EXPECT_FALSE(InputHostPressed(InputHostAction::ModeDebugMenu));
-    SDL_CloseJoystick(joystick);
-    SDL_DetachVirtualJoystick(id);
 }
 
 TEST_F(InputDebugBinding, CompleteMouseTapQueuesOnlyTheDistinctAllowedHostAction) {
