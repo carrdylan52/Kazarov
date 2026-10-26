@@ -223,6 +223,8 @@ bool                   g_touch_overlay_visible = true;
 #endif
 // The mouse is a menu's pointer (InputSetMenuMouse); the motion it has gathered for it.
 bool g_menu_mouse = false;
+std::uint32_t g_menu_pressed = 0;
+std::uint32_t g_menu_released = 0;
 bool g_menu_navigation = false;
 bool g_keyboard_stick_navigation = true;
 bool g_developer_menu = false;
@@ -973,6 +975,7 @@ void InputShutdown() {
     InputSetMovementLocked(false);
     MouseStop();
     g_menu_mouse = false;
+    g_menu_pressed = g_menu_released = 0;
     g_menu_navigation = false;
     g_keyboard_stick_navigation = true;
     g_developer_menu = false;
@@ -1097,6 +1100,10 @@ void InputHandleEvent(const SDL_Event &event) {
     if (swallowed || (was_live && !MouseInputLive())) {
         g_mouse_look_total = {0, 0, g_mouse_look_total.epoch + 1};
     }
+    // A swallowed capture-button release must not erase another live button's edges.
+    if (was_live != MouseInputLive()) {
+        g_menu_pressed = g_menu_released = 0;
+    }
     if (swallowed) {
         return;
     }
@@ -1125,6 +1132,11 @@ void InputHandleEvent(const SDL_Event &event) {
             }
             break;
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
+            if (g_menu_mouse && MouseInputLive()) {
+                const int button = event.button.button == SDL_BUTTON_MIDDLE ? 3 :
+                                   event.button.button == SDL_BUTTON_RIGHT ? 2 : event.button.button;
+                if (button >= 1 && button <= 5) g_menu_pressed |= 1u << (button - 1);
+            }
             // Preserve a click released before the next poll; don't count its poll edge twice.
             EnsureBindings();
             if (g_mouse_zoom && !g_menu_mouse &&
@@ -1139,9 +1151,15 @@ void InputHandleEvent(const SDL_Event &event) {
             g_host_polled[kZoomResetHost] = HostPolledHeld(kZoomResetHost);
             break;
         case SDL_EVENT_MOUSE_BUTTON_UP:
+            if (g_menu_mouse && MouseInputLive()) {
+                const int button = event.button.button == SDL_BUTTON_MIDDLE ? 3 :
+                                   event.button.button == SDL_BUTTON_RIGHT ? 2 : event.button.button;
+                if (button >= 1 && button <= 5) g_menu_released |= 1u << (button - 1);
+            }
             g_host_polled[kZoomResetHost] = HostPolledHeld(kZoomResetHost);
             break;
         case SDL_EVENT_WINDOW_FOCUS_LOST:
+            g_menu_pressed = g_menu_released = 0;
             g_mouse_look_total = {0, 0, g_mouse_look_total.epoch + 1};
             g_keys.fill(false);
             g_mouse_look.yaw = g_mouse_look.pitch = 0.0f;
@@ -1219,6 +1237,7 @@ void InputSetMenuMouse(bool on) {
         g_mouse_look_total = {0, 0, g_mouse_look_total.epoch + 1};
     }
     g_menu_mouse = on;
+    g_menu_pressed = g_menu_released = 0;
     g_menu_dx = 0.0f;
     g_menu_dy = 0.0f;
     g_touch_dx = g_touch_dy = g_touch_wheel = 0.0f;
@@ -1276,6 +1295,8 @@ InputMenuMouse InputTakeMenuMouse() {
     mouse.dy = g_menu_dy + dy + g_scripted.mouse_dy + std::exchange(g_touch_dy, 0.0f);
     mouse.wheel = MouseTakeWheel() + std::exchange(g_scripted_wheel, 0.0f) + std::exchange(g_touch_wheel, 0.0f);
     mouse.buttons = MouseButtons() | g_scripted.mouse_buttons | g_touch_held;
+    mouse.pressed = std::exchange(g_menu_pressed, 0);
+    mouse.released = std::exchange(g_menu_released, 0);
     // A tap is a click the pointer sees pressed on one take and let go on the next.
     if (g_touch_tap != 0) {
         if (g_touch_tap_shown) {

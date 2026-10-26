@@ -187,6 +187,10 @@ struct InputMenuMouse {
     float         dy = 0.0f;
     float         wheel = 0.0f;
     std::uint32_t buttons = 0;
+    // Event edges survive a complete click between logic samples. Bits follow
+    // buttons (Mouse1 left, Mouse2 right, Mouse3 middle); capture clicks are excluded.
+    std::uint32_t pressed = 0;
+    std::uint32_t released = 0;
 };
 
 // While on, the mouse is a menu's pointer: its motion and buttons reach InputTakeMenuMouse and no
