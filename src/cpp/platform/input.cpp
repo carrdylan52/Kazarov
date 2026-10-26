@@ -730,15 +730,60 @@ char TypedCharacter(int scancode, SDL_Keymod mod) {
     return key >= 0x20 && key < 0x7F ? static_cast<char>(key) : 0;
 }
 
+bool SamePhysicalSource(const Source &left, const Source &right) {
+    return left.kind == right.kind && left.code == right.code;
+}
+
+// Controller defaults count too: binding a host shortcut to rightstick must not take R3
+// from ordinary gameplay. Legacy Gamepad: sources and separate pad bindings share a device.
+bool ActionUsesSource(std::size_t action, const Source &source) {
+    const auto matches = [&](const Source &bound) { return SamePhysicalSource(source, bound); };
+    if (std::ranges::any_of(g_bindings[action], matches)) {
+        return true;
+    }
+    if (source.kind != Source::GamepadButton && source.kind != Source::GamepadTrigger) {
+        return false;
+    }
+    if (std::ranges::any_of(PadSources(action, g_pad_type), matches)) {
+        return true;
+    }
+    // Host actions can be pressed on either pad, whose default Select mapping may differ.
+    return std::ranges::any_of(g_slots, [&](const PadSlot &slot) {
+        return slot.gamepad != nullptr &&
+               std::ranges::any_of(PadSources(action, SDL_GetGamepadType(slot.gamepad)), matches);
+    });
+}
+
+bool SourceHasConflict(std::size_t action, const Source &source) {
+    for (std::size_t other = 0; other < kActionCount; ++other) {
+        if (other != action && ActionUsesSource(other, source)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Only the in-mode debug menu requires an exclusive source. Existing shared gameplay and
+// host shortcuts retain their behavior; no binding is removed or silently exchanged.
+bool HostSourceAllowed(std::size_t action, const Source &source) {
+    constexpr std::size_t mode_debug = kFirstHostAction + static_cast<std::size_t>(InputHostAction::ModeDebugMenu);
+    return action != mode_debug || !SourceHasConflict(action, source);
+}
+
 bool KeyBound(std::size_t host, int scancode) {
-    return std::ranges::any_of(g_bindings[kFirstHostAction + host], [&](const Source &source) {
-        return source.kind == Source::Key && source.code == scancode;
+    const std::size_t action = kFirstHostAction + host;
+    return std::ranges::any_of(g_bindings[action], [&](const Source &source) {
+        return source.kind == Source::Key && source.code == scancode && HostSourceAllowed(action, source);
     });
 }
 
 // Everything but the live keys, which count their presses as their events arrive.
 bool HostPolledHeld(std::size_t host) {
-    for (const Source &source : g_bindings[kFirstHostAction + host]) {
+    const std::size_t action = kFirstHostAction + host;
+    for (const Source &source : g_bindings[action]) {
+        if (!HostSourceAllowed(action, source)) {
+            continue;
+        }
         bool held = false;
         switch (source.kind) {
             case Source::Key:
@@ -758,7 +803,9 @@ bool HostPolledHeld(std::size_t host) {
             return true;
         }
     }
-    return std::ranges::any_of(PadSources(kFirstHostAction + host, g_pad_type), GamepadSourceHeld);
+    return std::ranges::any_of(PadSources(action, g_pad_type), [&](const Source &source) {
+        return HostSourceAllowed(action, source) && GamepadSourceHeld(source);
+    });
 }
 
 bool MouseAxisBound(int code) {
@@ -893,6 +940,49 @@ std::size_t FindAction(std::string_view action) {
  */
 bool TakesPad(std::size_t i) {
     return kActions[i].kind == ActionKind::Button || kActions[i].kind == ActionKind::Host;
+}
+
+std::string BindingSourceName(const Source &source) {
+    switch (source.kind) {
+        case Source::Key: {
+            const char *name = SDL_GetScancodeName(static_cast<SDL_Scancode>(source.code));
+            return name != nullptr ? name : "";
+        }
+        case Source::MouseButton:
+            return "Mouse" + std::to_string(source.code);
+        case Source::MouseAxis:
+            return std::string(source.scale < 0.0f ? "-" : "") + (source.code == 0 ? "MouseX" : "MouseY");
+        case Source::GamepadButton:
+        case Source::GamepadTrigger: {
+            std::string name = PadSourceName(source);
+            return name.empty() ? "" : "Gamepad:" + name;
+        }
+    }
+    return {};
+}
+
+std::string_view ReadableActionName(std::size_t action) {
+    static constexpr std::string_view names[] = {
+        "Up", "Down", "Left", "Right", "Cross", "Circle", "Square", "Triangle",
+        "L1", "R1", "L2", "R2", "L3", "R3", "Start", "Select",
+        "Left stick left", "Left stick right", "Left stick up", "Left stick down",
+        "Right stick left", "Right stick right", "Right stick up", "Right stick down",
+        "Walk modifier", "Left stick horizontal", "Left stick vertical", "Right stick horizontal", "Right stick vertical",
+        "Frame rate display", "Developer menu", "Debug menu", "Debug tools", "Gyro hold", "Zoom reset", "Quick loadout",
+    };
+    static_assert(std::size(names) == kActionCount);
+    return names[action];
+}
+
+void AppendSourceConflicts(std::size_t action, const Source &source, std::vector<std::string> &names) {
+    for (std::size_t other = 0; other < kActionCount; ++other) {
+        if (other != action && ActionUsesSource(other, source)) {
+            std::string name(ReadableActionName(other));
+            if (std::ranges::find(names, name) == names.end()) {
+                names.push_back(std::move(name));
+            }
+        }
+    }
 }
 
 } // namespace
@@ -1125,21 +1215,23 @@ void InputHandleEvent(const SDL_Event &event) {
             }
             break;
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
-            // Preserve a click released before the next poll; don't count its poll edge twice.
+            // Preserve a complete click between polls for every host action. Collision
+            // filtering is identical to the live/polled path; gameplay Mouse3 remains R3.
             EnsureBindings();
-            if (g_mouse_zoom && !g_menu_mouse &&
-                std::ranges::any_of(g_bindings[kFirstHostAction + kZoomResetHost], [&](const Source &source) {
-                    // SDL numbers middle 2/right 3; bindings use right Mouse2/middle Mouse3.
-                    int button = event.button.button == SDL_BUTTON_MIDDLE ? 3 : event.button.button == SDL_BUTTON_RIGHT ? 2
-                                                                                                                        : event.button.button;
-                    return source.kind == Source::MouseButton && source.code == button;
-                })) {
-                ++g_host_presses[kZoomResetHost];
+            for (std::size_t host = 0; host < kHostActionCount; ++host) {
+                if (host == kZoomResetHost && (!g_mouse_zoom || g_menu_mouse)) continue;
+                const int button = event.button.button == SDL_BUTTON_MIDDLE ? 3 :
+                                   event.button.button == SDL_BUTTON_RIGHT ? 2 : event.button.button;
+                if (std::ranges::any_of(g_bindings[kFirstHostAction + host], [&](const Source &source) {
+                    return source.kind == Source::MouseButton && source.code == button &&
+                           HostSourceAllowed(kFirstHostAction + host, source);
+                })) ++g_host_presses[host];
+                g_host_polled[host] = HostPolledHeld(host);
             }
-            g_host_polled[kZoomResetHost] = HostPolledHeld(kZoomResetHost);
             break;
         case SDL_EVENT_MOUSE_BUTTON_UP:
-            g_host_polled[kZoomResetHost] = HostPolledHeld(kZoomResetHost);
+            for (std::size_t host = 0; host < kHostActionCount; ++host)
+                g_host_polled[host] = HostPolledHeld(host);
             break;
         case SDL_EVENT_WINDOW_FOCUS_LOST:
             g_mouse_look_total = {0, 0, g_mouse_look_total.epoch + 1};
@@ -1571,48 +1663,61 @@ bool InputActionTakesGamepad(std::string_view action) {
     return false;
 }
 
-std::string InputBindingLabel(std::string_view action) {
+std::vector<std::string> InputBindingNames(std::string_view action) {
     EnsureBindings();
-    std::string text;
-    bool        known = false;
-    for (std::size_t i = 0; i < kActionCount; ++i) {
-        if (kActions[i].name != action) {
-            continue;
-        }
-        known = true;
-        for (const Source &source : g_bindings[i]) {
-            std::string one;
-            switch (source.kind) {
-                case Source::Key: {
-                    const char *name = SDL_GetScancodeName(static_cast<SDL_Scancode>(source.code));
-                    one = name != nullptr ? name : "";
-                    break;
-                }
-                case Source::MouseButton:
-                    one = "Mouse" + std::to_string(source.code);
-                    break;
-                case Source::MouseAxis:
-                    one = std::string(source.scale < 0.0f ? "-" : "") + (source.code == 0 ? "MouseX" : "MouseY");
-                    break;
-                case Source::GamepadButton:
-                case Source::GamepadTrigger: {
-                    std::string name = PadSourceName(source);
-                    one = name.empty() ? "" : "Gamepad:" + name;
-                    break;
-                }
-            }
-            if (!one.empty()) {
-                if (!text.empty()) {
-                    text += ", ";
-                }
-                text += one;
-            }
+    std::vector<std::string> names;
+    const std::size_t i = FindAction(action);
+    if (i == kActionCount) {
+        return names;
+    }
+    for (const Source &source : g_bindings[i]) {
+        std::string name = BindingSourceName(source);
+        if (!name.empty()) {
+            names.push_back(std::move(name));
         }
     }
-    if (!known) {
+    return names;
+}
+
+std::string InputBindingLabel(std::string_view action) {
+    if (FindAction(action) == kActionCount) {
         return {};
     }
+    std::string text;
+    for (const std::string &name : InputBindingNames(action)) {
+        text += (text.empty() ? "" : ", ") + name;
+    }
     return text.empty() ? "None" : text;
+}
+
+std::vector<std::string> InputBindingConflicts(std::string_view action) {
+    EnsureBindings();
+    std::vector<std::string> names;
+    const std::size_t i = FindAction(action);
+    if (i == kActionCount) {
+        return names;
+    }
+    for (const Source &source : g_bindings[i]) {
+        AppendSourceConflicts(i, source, names);
+    }
+    if (TakesPad(i)) {
+        for (const Source &source : PadSources(i, g_pad_type)) {
+            AppendSourceConflicts(i, source, names);
+        }
+    }
+    return names;
+}
+
+std::vector<std::string> InputBindingSourceConflicts(std::string_view action, std::string_view source_name, bool pad) {
+    EnsureBindings();
+    std::vector<std::string> names;
+    const std::size_t i = FindAction(action);
+    Source source;
+    if (i != kActionCount && (pad ? ParsePadSource(source_name, source)
+                                 : ParseSource(source_name, kActions[i].kind, source))) {
+        AppendSourceConflicts(i, source, names);
+    }
+    return names;
 }
 
 void InputBeginBindCapture() {
@@ -1819,7 +1924,7 @@ bool InputHostHeld(InputHostAction action) {
     EnsureBindings();
     std::size_t host = static_cast<std::size_t>(action);
     for (const Source &source : g_bindings[kFirstHostAction + host]) {
-        if (source.kind == Source::Key && g_keys[source.code]) {
+        if (source.kind == Source::Key && g_keys[source.code] && HostSourceAllowed(kFirstHostAction + host, source)) {
             return true;
         }
     }

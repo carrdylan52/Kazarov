@@ -337,6 +337,20 @@ bool InputActionTakesGamepad(std::string_view action);
 // when nothing is bound and "" when the action is unknown.
 std::string InputBindingLabel(std::string_view action);
 
+// The individual source names used by InputBindingLabel, without its punctuation or "None".
+// Empty for an unknown action or an action without any keyboard/mouse bindings.
+std::vector<std::string> InputBindingNames(std::string_view action);
+
+// Other actions using any of this action's physical keyboard, mouse or controller sources.
+// Names are readable ("R3", "Zoom reset"), deduplicated, and exclude the action itself.
+std::vector<std::string> InputBindingConflicts(std::string_view action);
+
+// The same conflict check for one proposed source, before storing a binding. With pad set,
+// source_name uses InputBindPadButtons names; otherwise it uses InputBindKeys names.
+// Empty when the action/source is unknown or when no other action uses the source.
+std::vector<std::string> InputBindingSourceConflicts(std::string_view action, std::string_view source_name,
+                                                   bool pad = false);
+
 // Opens a rebind capture: the keys and buttons held now become the set already seen, so the press
 // that opens the capture is not itself bound.
 void InputBeginBindCapture();
