@@ -189,6 +189,9 @@ struct InputMenuMouse {
     std::uint32_t buttons = 0;
     // Event edges survive a complete click between logic samples. Bits follow
     // buttons (Mouse1 left, Mouse2 right, Mouse3 middle); capture clicks are excluded.
+    // Only the live mouse sets them: scripted and touchpad clicks show in buttons alone.
+    // Repeated clicks of one button between takes share its bit, and a press made
+    // before InputSetMenuMouse(true) can still report its release.
     std::uint32_t pressed = 0;
     std::uint32_t released = 0;
 };
