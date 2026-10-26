@@ -216,4 +216,3 @@ TEST_F(MenuMouseEdges, ExtraButtonsKeepTheirBitsAndInvalidButtonsAreIgnored) {
     EXPECT_EQ(clicks.released, 24u);
     EXPECT_EQ(clicks.buttons, 0u);
 }
-
