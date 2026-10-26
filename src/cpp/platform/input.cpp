@@ -734,6 +734,21 @@ bool SamePhysicalSource(const Source &left, const Source &right) {
     return left.kind == right.kind && left.code == right.code;
 }
 
+// The layouts whose controller defaults are in use: every connected controller's, whose default
+// Select can differ, or the last first controller's while none is connected.
+std::vector<SDL_GamepadType> PadLayouts() {
+    std::vector<SDL_GamepadType> types;
+    for (const PadSlot &slot : g_slots) {
+        if (slot.gamepad != nullptr) {
+            types.push_back(SDL_GetGamepadType(slot.gamepad));
+        }
+    }
+    if (types.empty()) {
+        types.push_back(g_pad_type);
+    }
+    return types;
+}
+
 // Controller defaults count too: binding a host shortcut to rightstick must not take R3
 // from ordinary gameplay. Legacy Gamepad: sources and separate pad bindings share a device.
 bool ActionUsesSource(std::size_t action, const Source &source) {
@@ -752,13 +767,9 @@ bool ActionUsesSource(std::size_t action, const Source &source) {
         return true;
     }
 #endif
-    if (std::ranges::any_of(PadSources(action, g_pad_type), matches)) {
-        return true;
-    }
-    // Host actions can be pressed on either pad, whose default Select mapping may differ.
-    return std::ranges::any_of(g_slots, [&](const PadSlot &slot) {
-        return slot.gamepad != nullptr &&
-               std::ranges::any_of(PadSources(action, SDL_GetGamepadType(slot.gamepad)), matches);
+    // Host actions can be pressed on either pad; a disconnected pad's layout no longer counts.
+    return std::ranges::any_of(PadLayouts(), [&](SDL_GamepadType type) {
+        return std::ranges::any_of(PadSources(action, type), matches);
     });
 }
 
@@ -1715,15 +1726,9 @@ std::vector<std::string> InputBindingConflicts(std::string_view action) {
         AppendSourceConflicts(i, source, names);
     }
     if (TakesPad(i)) {
-        for (const Source &source : PadSources(i, g_pad_type)) {
-            AppendSourceConflicts(i, source, names);
-        }
-        // A second controller can use a different default Select source.
-        for (const PadSlot &slot : g_slots) {
-            if (slot.gamepad != nullptr) {
-                for (const Source &source : PadSources(i, SDL_GetGamepadType(slot.gamepad))) {
-                    AppendSourceConflicts(i, source, names);
-                }
+        for (SDL_GamepadType type : PadLayouts()) {
+            for (const Source &source : PadSources(i, type)) {
+                AppendSourceConflicts(i, source, names);
             }
         }
 #ifdef KZ_TOUCH_OVERLAY

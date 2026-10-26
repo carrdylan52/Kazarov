@@ -286,7 +286,8 @@ enum class InputHostAction {
     FpsToggle,
     DeveloperMenu,
     DebugMenu,
-    // A game's in-mode debug menu (Dark Cloud 2: R3 with its debug flag on).
+    // A game's in-mode debug menu (Dark Cloud 2: R3 with its debug flag on). It ignores each of its
+    // sources that another action also uses (InputBindingConflicts), keeping every binding.
     ModeDebugMenu,
     GyroHold,
     ZoomReset,
@@ -344,6 +345,8 @@ std::vector<std::string> InputBindingNames(std::string_view action);
 
 // Other actions using any of this action's physical keyboard, mouse or controller sources.
 // Names are readable ("R3", "Zoom reset"), deduplicated, and exclude the action itself.
+// Controller defaults follow every connected controller's layout, or the last first
+// controller's while none is connected; a visible touch overlay adds its own defaults.
 std::vector<std::string> InputBindingConflicts(std::string_view action);
 
 // The same conflict check for one proposed source, before storing a binding. With pad set,

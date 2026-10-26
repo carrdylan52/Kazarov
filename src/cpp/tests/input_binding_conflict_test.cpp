@@ -168,6 +168,47 @@ TEST_F(InputBindingConflict, ControllerTypeChangesRecomputeConflictsWithoutChang
     EXPECT_EQ(InputPadBindingNames("mode_debug_menu"), std::vector<std::string>{"back"});
 }
 
+TEST_F(InputBindingConflict, ADisconnectedFirstControllerNoLongerReservesItsSelectSource) {
+    // Back is Select on a standard pad and nothing on a PS4; the touchpad is the reverse.
+    const struct {
+        SDL_GamepadType   first;
+        SDL_GamepadType   remaining;
+        std::string_view  source;
+        SDL_GamepadButton button;
+    } cases[] = {
+        {SDL_GAMEPAD_TYPE_STANDARD, SDL_GAMEPAD_TYPE_PS4, "back", SDL_GAMEPAD_BUTTON_BACK},
+        {SDL_GAMEPAD_TYPE_PS4, SDL_GAMEPAD_TYPE_STANDARD, "touchpad", SDL_GAMEPAD_BUTTON_TOUCHPAD},
+    };
+    for (const auto &each : cases) {
+        SCOPED_TRACE(each.source);
+        VirtualPad first;
+        ASSERT_TRUE(first.Attach("Binding conflict first", each.first)) << SDL_GetError();
+        InputPoll();
+        VirtualPad remaining;
+        ASSERT_TRUE(remaining.Attach("Binding conflict remaining", each.remaining)) << SDL_GetError();
+        InputPoll();
+        const std::string_view source[] = {each.source};
+        ASSERT_TRUE(InputBindPadButtons("mode_debug_menu", source));
+        EXPECT_EQ(InputBindingConflicts("mode_debug_menu"), std::vector<std::string>{"Select"});
+        first.Detach();
+        InputPoll();
+        EXPECT_TRUE(InputBindingConflicts("mode_debug_menu").empty());
+        EXPECT_FALSE(Contains(InputBindingConflicts("select"), "Debug tools"));
+        ASSERT_TRUE(remaining.Button(each.button, true));
+        InputPoll();
+        EXPECT_EQ((InputGetPad(0).buttons | InputGetPad(1).buttons) & kInputSelect, 0);
+        EXPECT_TRUE(InputHostHeld(InputHostAction::ModeDebugMenu));
+        EXPECT_TRUE(InputHostPressed(InputHostAction::ModeDebugMenu));
+        EXPECT_FALSE(InputHostPressed(InputHostAction::ModeDebugMenu));
+        ASSERT_TRUE(remaining.Button(each.button, false));
+        remaining.Detach();
+        InputPoll();
+        // With no controller left, the first controller's remembered layout explains the source.
+        EXPECT_EQ(InputBindingConflicts("mode_debug_menu"), std::vector<std::string>{"Select"});
+        EXPECT_EQ(InputPadBindingNames("mode_debug_menu"), std::vector<std::string>{std::string(each.source)});
+    }
+}
+
 #ifdef KZ_TOUCH_OVERLAY
 TEST_F(InputBindingConflict, OverlaySelectKeepsItsConflictAfterPlayStationDisconnects) {
     VirtualPad pad;
