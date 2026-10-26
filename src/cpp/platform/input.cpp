@@ -986,6 +986,7 @@ void InputShutdown() {
     g_touch_held = g_touch_tap = 0;
     g_mouse_look = {0.0f, 0.0f, g_mouse_look.read};
     g_keys.fill(false);
+    g_bind_capture = false;
     g_scripted = {};
     g_scripted_wheel = 0.0f;
     g_host_presses.fill(0);
@@ -1266,6 +1267,22 @@ std::string InputTakeText() {
     return std::exchange(g_text, {});
 }
 
+// How InputHeldTextKeys names a key SDL leaves unnamed or whose name resolves to another key (SDL's
+// Windows, X11 and Wayland drivers rename Application to "Menu", which SDL_SCANCODE_MENU is also
+// called): "Scancode " and its number. Only InputBindSourceHeld reads it back; bindings do not.
+static constexpr std::string_view kNumberedKey = "scancode ";
+
+static int NumberedKey(std::string_view lower) {
+    if (!lower.starts_with(kNumberedKey)) {
+        return -1;
+    }
+    std::string_view digits = lower.substr(kNumberedKey.size());
+    int              scancode = -1;
+    auto [end, error] = std::from_chars(digits.data(), digits.data() + digits.size(), scancode);
+    bool parsed = error == std::errc{} && end == digits.data() + digits.size();
+    return parsed && scancode >= 0 && scancode < SDL_SCANCODE_COUNT ? scancode : -1;
+}
+
 std::vector<std::string> InputHeldTextKeys() {
     std::vector<std::string> keys;
     constexpr SDL_Keymod modifiers[] = {SDL_KMOD_SHIFT, SDL_KMOD_CAPS, SDL_KMOD_NUM,
@@ -1289,8 +1306,10 @@ std::vector<std::string> InputHeldTextKeys() {
             continue;
         }
         const char *name = SDL_GetScancodeName(static_cast<SDL_Scancode>(scancode));
-        if (name && *name) {
+        if (name && *name && InputScancodeFromName(name) == scancode) {
             keys.emplace_back(name);
+        } else {
+            keys.push_back("Scancode " + std::to_string(scancode));
         }
     }
     return keys;
@@ -1691,7 +1710,10 @@ bool InputBindSourceHeld(std::string_view name) {
     if (lower.size() == 6 && lower.starts_with("mouse") && lower[5] >= '1' && lower[5] < '1' + kMouseButtonCount) {
         return ((MouseButtons() | g_scripted.mouse_buttons) & (1u << (lower[5] - '1'))) != 0;
     }
-    int scancode = InputScancodeFromName(name);
+    int scancode = NumberedKey(lower);
+    if (scancode < 0) {
+        scancode = InputScancodeFromName(name);
+    }
     if (scancode >= 0 && !lower.starts_with("gamepad:")) {
         return BindKeyHeld(scancode);
     }

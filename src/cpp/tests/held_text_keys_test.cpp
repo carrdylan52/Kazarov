@@ -114,6 +114,9 @@ TEST_F(HeldTextKeys, ObservingDoesNotDrainTextConsumeBindEdgesOrAdvancePadHistor
     EXPECT_TRUE(InputTakeBindKey(false).empty());
     Key(SDL_SCANCODE_S, true);
     EXPECT_EQ(InputTakeText(), "s"); // The observer did not expire text capture.
+    InputShutdown();
+    Key(SDL_SCANCODE_D, true);
+    EXPECT_TRUE(InputTakeBindKey(false).empty()); // Shutdown closed the capture.
 }
 
 TEST_F(HeldTextKeys, PointerCaptureAndFocusFollowExistingPhysicalSourceLifecycle) {
@@ -141,7 +144,7 @@ TEST_F(HeldTextKeys, PointerCaptureAndFocusFollowExistingPhysicalSourceLifecycle
     EXPECT_TRUE(InputHeldTextKeys().empty());
 }
 
-TEST_F(HeldTextKeys, ScancodeEnumerationIsBoundedAndReturnedNamesRoundTrip) {
+TEST_F(HeldTextKeys, ScancodeEnumerationIsBoundedAndEachNameReleasesWithItsOwnKey) {
     InputKeyboardMouse held;
     for (int code = 0; code < SDL_SCANCODE_COUNT; ++code) held.keys.push_back(code);
     held.keys.insert(held.keys.end(), {-1, SDL_SCANCODE_COUNT, 1000000, SDL_SCANCODE_W});
@@ -149,7 +152,49 @@ TEST_F(HeldTextKeys, ScancodeEnumerationIsBoundedAndReturnedNamesRoundTrip) {
     const auto names = InputHeldTextKeys();
     EXPECT_LE(names.size(), SDL_SCANCODE_COUNT);
     EXPECT_EQ(std::set<std::string>(names.begin(), names.end()).size(), names.size());
-    for (const auto &name : names) EXPECT_TRUE(InputBindSourceHeld(name)) << name;
-    InputSetScriptedDevices({});
-    for (const auto &name : names) EXPECT_FALSE(InputBindSourceHeld(name)) << name;
+    // Held alone, each key's name must read back as that key, not another one of the same name.
+    std::size_t text_keys = 0;
+    for (int code = 0; code < SDL_SCANCODE_COUNT; ++code) {
+        InputSetScriptedDevices({.keys = {code}});
+        const auto alone = InputHeldTextKeys();
+        ASSERT_LE(alone.size(), 1u) << code;
+        if (alone.empty()) continue;
+        ++text_keys;
+        EXPECT_TRUE(InputBindSourceHeld(alone[0])) << alone[0];
+        InputSetScriptedDevices({});
+        EXPECT_FALSE(InputBindSourceHeld(alone[0])) << alone[0];
+    }
+    EXPECT_EQ(text_keys, names.size());
+}
+
+TEST_F(HeldTextKeys, KeysWithoutTheirOwnNameAreNumbered) {
+    // SDL resolves a shared name to its first key, as with "Menu" once SDL's desktop drivers give
+    // that name to Application too. Renaming A to "Space" makes Space such a later key here.
+    struct ScancodeName {
+        SDL_Scancode scancode;
+        const char *original = SDL_GetScancodeName(scancode);
+        ~ScancodeName() { SDL_SetScancodeName(scancode, original); }
+    } shared{SDL_SCANCODE_A}, unnamed{SDL_SCANCODE_W};
+    ASSERT_TRUE(SDL_SetScancodeName(SDL_SCANCODE_A, "Space"));
+    ASSERT_TRUE(SDL_SetScancodeName(SDL_SCANCODE_W, ""));
+    Key(SDL_SCANCODE_SPACE, true);
+    InputSetScriptedDevices({.keys = {SDL_SCANCODE_W}});
+    EXPECT_EQ(InputHeldTextKeys(), (std::vector<std::string>{"Scancode 26", "Scancode 44"}));
+    EXPECT_FALSE(InputBindSourceHeld("Space")); // Read back as A, which is up.
+    EXPECT_TRUE(InputBindSourceHeld("scancode 44"));
+    Key(SDL_SCANCODE_SPACE, false);
+    EXPECT_FALSE(InputBindSourceHeld("Scancode 44"));
+    EXPECT_TRUE(InputBindSourceHeld("Scancode 26"));
+    InputSetScriptedDevices({.keys = {SDL_SCANCODE_A}});
+    EXPECT_EQ(InputHeldTextKeys(), (std::vector<std::string>{"Space"}));
+    EXPECT_TRUE(InputBindSourceHeld("Space"));
+    EXPECT_FALSE(InputBindSourceHeld("Scancode 26"));
+    InputKeyboardMouse all;
+    for (int code = 0; code < SDL_SCANCODE_COUNT; ++code) all.keys.push_back(code);
+    InputSetScriptedDevices(all);
+    for (const char *bad : {"Scancode", "Scancode ", "Scancode -1", "Scancode 512", "Scancode 26x",
+                            "Scancode  26", "Scancode +26"}) {
+        EXPECT_FALSE(InputBindSourceHeld(bad)) << bad;
+    }
+    EXPECT_EQ(InputScancodeFromName("Scancode 26"), -1); // Not a binding name.
 }

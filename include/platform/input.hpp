@@ -218,8 +218,9 @@ void InputSetTextEntry(bool on);
  */
 std::string InputTakeText();
 
-// Physical binding-source names for held keys capable of printable ASCII/editing
-// input, including modified layout characters. Reads live and scripted keys without
+// Names of the held physical keys capable of printable ASCII/editing input, including
+// modified layout characters: SDL's key name, or "Scancode <n>" when SDL leaves the key
+// unnamed or its name resolves to another key. Reads live and scripted keys without
 // changing text, binding capture or pad history. Retain these names and use
 // InputBindSourceHeld to wait for release even while text entry suppresses pad input.
 std::vector<std::string> InputHeldTextKeys();
@@ -388,7 +389,7 @@ std::string InputTakeBindPadButton();
  */
 std::string InputPadGlyphAction(std::string_view action);
 
-// Whether the source InputTakeBindKey or InputTakeBindPadButton named is held now. A caller that
-// has just bound it keeps swallowing input until it is let go, so the press that made the binding
-// does not also act on the action it was given to.
+// Whether the source InputTakeBindKey, InputTakeBindPadButton or InputHeldTextKeys named is held
+// now. A caller that has just bound it keeps swallowing input until it is let go, so the press that
+// made the binding does not also act on the action it was given to.
 bool InputBindSourceHeld(std::string_view name);
