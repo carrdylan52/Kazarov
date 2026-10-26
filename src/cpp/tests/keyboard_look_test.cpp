@@ -82,6 +82,8 @@ TEST_F(KeyboardLook, TextEntrySuppressesLiveReboundMovementUntilCaptureExpires) 
     for (int read = 0; read < 2; ++read) {
         InputLatchPad(0);
         EXPECT_EQ(InputGetKeyboardMovement().y, 0.0f);
+        // Up types nothing, so its pad binding still navigates the text field.
+        EXPECT_LT(InputGetPad(0).left_y, kInputAxisCentre);
     }
     // The text owner normally restates capture each tick. An abandoned owner
     // already expires on the third pad read; keyboard movement follows it.

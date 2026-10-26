@@ -307,6 +307,8 @@ void InputSetScriptedDevices(const InputKeyboardMouse &held);
 
 // Movement bound to keyboard keys, independent of controller look and mouse axes.
 // First-person gameplay uses it to walk while the controller retains retail look controls.
+// It reads zero while the menu mouse, a movement lock or text entry holds the keyboard. Text
+// entry drops only typing keys from the pad (InputSetTextEntry); other keys still navigate.
 struct InputKeyboardMovement {
     float x = 0.0f;
     float y = 0.0f;
