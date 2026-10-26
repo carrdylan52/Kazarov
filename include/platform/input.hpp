@@ -218,6 +218,12 @@ void InputSetTextEntry(bool on);
  */
 std::string InputTakeText();
 
+// Physical binding-source names for held keys capable of printable ASCII/editing
+// input, including modified layout characters. Reads live and scripted keys without
+// changing text, binding capture or pad history. Retain these names and use
+// InputBindSourceHeld to wait for release even while text entry suppresses pad input.
+std::vector<std::string> InputHeldTextKeys();
+
 // Takes the pointer's motion and wheel since the last call, live and scripted.
 InputMenuMouse InputTakeMenuMouse();
 

@@ -1266,6 +1266,36 @@ std::string InputTakeText() {
     return std::exchange(g_text, {});
 }
 
+std::vector<std::string> InputHeldTextKeys() {
+    std::vector<std::string> keys;
+    constexpr SDL_Keymod modifiers[] = {SDL_KMOD_SHIFT, SDL_KMOD_CAPS, SDL_KMOD_NUM,
+                                        SDL_KMOD_ALT, SDL_KMOD_MODE, SDL_KMOD_LEVEL5};
+    for (int scancode = 0; scancode < SDL_SCANCODE_COUNT; ++scancode) {
+        if (!BindKeyHeld(scancode)) {
+            continue;
+        }
+        // A layout can produce non-ASCII without Shift but ASCII with it. Check
+        // the bounded modifier combinations that affect SDL text mapping, so
+        // changing modifiers while a key is held cannot evade the UI barrier.
+        bool text_key = TypedCharacter(scancode, SDL_KMOD_NONE) != 0;
+        for (unsigned mask = 1; !text_key && mask < (1u << std::size(modifiers)); ++mask) {
+            SDL_Keymod mod = SDL_KMOD_NONE;
+            for (std::size_t bit = 0; bit < std::size(modifiers); ++bit) {
+                if (mask & (1u << bit)) mod = static_cast<SDL_Keymod>(mod | modifiers[bit]);
+            }
+            text_key = TypedCharacter(scancode, mod) != 0;
+        }
+        if (!text_key) {
+            continue;
+        }
+        const char *name = SDL_GetScancodeName(static_cast<SDL_Scancode>(scancode));
+        if (name && *name) {
+            keys.emplace_back(name);
+        }
+    }
+    return keys;
+}
+
 InputMenuMouse InputTakeMenuMouse() {
     float dx = 0.0f;
     float dy = 0.0f;
