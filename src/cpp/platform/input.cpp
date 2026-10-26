@@ -1267,9 +1267,9 @@ std::string InputTakeText() {
     return std::exchange(g_text, {});
 }
 
-// How InputHeldTextKeys names a key SDL leaves unnamed or whose name resolves to another key (SDL's
-// Windows, X11 and Wayland drivers rename Application to "Menu", which SDL_SCANCODE_MENU is also
-// called): "Scancode " and its number. Only InputBindSourceHeld reads it back; bindings do not.
+// How InputHeldTextKeys names a key SDL leaves unnamed or whose name InputBindSourceHeld would read
+// as another source (SDL's Windows, X11 and Wayland drivers rename Application to "Menu", which
+// SDL_SCANCODE_MENU is also called): "Scancode " and its number. Bindings do not read it.
 static constexpr std::string_view kNumberedKey = "scancode ";
 
 static int NumberedKey(std::string_view lower) {
@@ -1281,6 +1281,22 @@ static int NumberedKey(std::string_view lower) {
     auto [end, error] = std::from_chars(digits.data(), digits.data() + digits.size(), scancode);
     bool parsed = error == std::errc{} && end == digits.data() + digits.size();
     return parsed && scancode >= 0 && scancode < SDL_SCANCODE_COUNT ? scancode : -1;
+}
+
+// The mouse button (0 for Mouse1) a lower-case source name gives, or -1.
+static int MouseSource(std::string_view lower) {
+    bool mouse = lower.size() == 6 && lower.starts_with("mouse") && lower[5] >= '1' && lower[5] < '1' + kMouseButtonCount;
+    return mouse ? lower[5] - '1' : -1;
+}
+
+// The key InputBindSourceHeld polls for a source name, or -1 for a mouse or gamepad button or an
+// unknown name.
+static int BindSourceKey(std::string_view name, std::string_view lower) {
+    if (MouseSource(lower) >= 0 || lower.starts_with("gamepad:")) {
+        return -1;
+    }
+    int scancode = NumberedKey(lower);
+    return scancode >= 0 ? scancode : InputScancodeFromName(name);
 }
 
 std::vector<std::string> InputHeldTextKeys() {
@@ -1306,7 +1322,7 @@ std::vector<std::string> InputHeldTextKeys() {
             continue;
         }
         const char *name = SDL_GetScancodeName(static_cast<SDL_Scancode>(scancode));
-        if (name && *name && InputScancodeFromName(name) == scancode) {
+        if (name && *name && BindSourceKey(name, Lower(name)) == scancode) {
             keys.emplace_back(name);
         } else {
             keys.push_back("Scancode " + std::to_string(scancode));
@@ -1707,14 +1723,11 @@ std::string InputTakeBindKey(bool allow_gamepad) {
 
 bool InputBindSourceHeld(std::string_view name) {
     std::string lower = Lower(name);
-    if (lower.size() == 6 && lower.starts_with("mouse") && lower[5] >= '1' && lower[5] < '1' + kMouseButtonCount) {
-        return ((MouseButtons() | g_scripted.mouse_buttons) & (1u << (lower[5] - '1'))) != 0;
+    if (int button = MouseSource(lower); button >= 0) {
+        return ((MouseButtons() | g_scripted.mouse_buttons) & (1u << button)) != 0;
     }
-    int scancode = NumberedKey(lower);
-    if (scancode < 0) {
-        scancode = InputScancodeFromName(name);
-    }
-    if (scancode >= 0 && !lower.starts_with("gamepad:")) {
+    int scancode = BindSourceKey(name, lower);
+    if (scancode >= 0) {
         return BindKeyHeld(scancode);
     }
     // A gamepad button, by either name a capture gives it ("Gamepad:a" or "a").

@@ -17,6 +17,13 @@ void Key(SDL_Scancode scancode, bool down, SDL_Keymod mod = SDL_KMOD_NONE) {
     InputHandleEvent(event);
 }
 
+// Restores a key's SDL name at the end of the scope.
+struct ScancodeName {
+    SDL_Scancode scancode;
+    const char *original = SDL_GetScancodeName(scancode);
+    ~ScancodeName() { SDL_SetScancodeName(scancode, original); }
+};
+
 class HeldTextKeys : public testing::Test {
 protected:
     void SetUp() override {
@@ -170,11 +177,7 @@ TEST_F(HeldTextKeys, ScancodeEnumerationIsBoundedAndEachNameReleasesWithItsOwnKe
 TEST_F(HeldTextKeys, KeysWithoutTheirOwnNameAreNumbered) {
     // SDL resolves a shared name to its first key, as with "Menu" once SDL's desktop drivers give
     // that name to Application too. Renaming A to "Space" makes Space such a later key here.
-    struct ScancodeName {
-        SDL_Scancode scancode;
-        const char *original = SDL_GetScancodeName(scancode);
-        ~ScancodeName() { SDL_SetScancodeName(scancode, original); }
-    } shared{SDL_SCANCODE_A}, unnamed{SDL_SCANCODE_W};
+    ScancodeName shared{SDL_SCANCODE_A}, unnamed{SDL_SCANCODE_W};
     ASSERT_TRUE(SDL_SetScancodeName(SDL_SCANCODE_A, "Space"));
     ASSERT_TRUE(SDL_SetScancodeName(SDL_SCANCODE_W, ""));
     Key(SDL_SCANCODE_SPACE, true);
@@ -197,4 +200,26 @@ TEST_F(HeldTextKeys, KeysWithoutTheirOwnNameAreNumbered) {
         EXPECT_FALSE(InputBindSourceHeld(bad)) << bad;
     }
     EXPECT_EQ(InputScancodeFromName("Scancode 26"), -1); // Not a binding name.
+}
+
+TEST_F(HeldTextKeys, KeysNamedLikeAnotherSourceAreNumbered) {
+    // SDL_SetScancodeName accepts any name, including one InputBindSourceHeld reads as another
+    // key's number, a mouse button or a gamepad button.
+    ScancodeName numbered{SDL_SCANCODE_S}, mouse{SDL_SCANCODE_D}, pad{SDL_SCANCODE_F};
+    ASSERT_TRUE(SDL_SetScancodeName(SDL_SCANCODE_S, "Scancode 26"));
+    ASSERT_TRUE(SDL_SetScancodeName(SDL_SCANCODE_D, "Mouse1"));
+    ASSERT_TRUE(SDL_SetScancodeName(SDL_SCANCODE_F, "Gamepad:a"));
+    for (SDL_Scancode code : {SDL_SCANCODE_D, SDL_SCANCODE_F, SDL_SCANCODE_S}) {
+        const std::string name = "Scancode " + std::to_string(code);
+        InputSetScriptedDevices({.keys = {code}});
+        EXPECT_EQ(InputHeldTextKeys(), std::vector<std::string>{name});
+        EXPECT_TRUE(InputBindSourceHeld(name)) << name;
+        InputSetScriptedDevices({});
+        EXPECT_FALSE(InputBindSourceHeld(name)) << name;
+    }
+    InputSetScriptedDevices({.keys = {SDL_SCANCODE_S, SDL_SCANCODE_W}});
+    EXPECT_EQ(InputHeldTextKeys(), (std::vector<std::string>{"Scancode 22", "W"}));
+    InputSetScriptedDevices({.keys = {SDL_SCANCODE_W}});
+    EXPECT_FALSE(InputBindSourceHeld("Scancode 22"));
+    EXPECT_TRUE(InputBindSourceHeld("W"));
 }

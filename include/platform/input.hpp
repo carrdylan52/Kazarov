@@ -220,9 +220,10 @@ std::string InputTakeText();
 
 // Names of the held physical keys capable of printable ASCII/editing input, including
 // modified layout characters: SDL's key name, or "Scancode <n>" when SDL leaves the key
-// unnamed or its name resolves to another key. Reads live and scripted keys without
-// changing text, binding capture or pad history. Retain these names and use
-// InputBindSourceHeld to wait for release even while text entry suppresses pad input.
+// unnamed or InputBindSourceHeld would read its name as another source (a key SDL also
+// gives that name, a mouse or gamepad button, or another key's number). Reads live and
+// scripted keys without changing text, binding capture or pad history. Retain these names
+// and use InputBindSourceHeld to wait for release even while text entry suppresses pad input.
 std::vector<std::string> InputHeldTextKeys();
 
 // Takes the pointer's motion and wheel since the last call, live and scripted.
